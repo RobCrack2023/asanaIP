@@ -273,6 +273,17 @@
   border-radius: 4px;
   font-size: 12px;
   color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.eml-attachment-badge.clickable {
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.eml-attachment-badge.clickable:hover {
+  background: var(--accent);
+  color: white;
 }
 
 .eml-body {

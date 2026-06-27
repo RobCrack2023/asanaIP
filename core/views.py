@@ -304,6 +304,7 @@ class AssetViewSet(viewsets.ModelViewSet):
                 'attachments': [],
             }
 
+            att_index = 0
             if msg.is_multipart():
                 for part in msg.walk():
                     content_type = part.get_content_type()
@@ -313,10 +314,12 @@ class AssetViewSet(viewsets.ModelViewSet):
                         filename = part.get_filename() or 'adjunto'
                         payload = part.get_payload(decode=True)
                         result['attachments'].append({
+                            'index': att_index,
                             'filename': filename,
                             'content_type': content_type,
                             'size': len(payload) if payload else 0,
                         })
+                        att_index += 1
                     elif content_type == 'text/plain' and not result['body_text']:
                         payload = part.get_payload(decode=True)
                         if payload:
@@ -336,3 +339,35 @@ class AssetViewSet(viewsets.ModelViewSet):
             return Response(result)
         except Exception as e:
             return Response({'error': f'Error al parsear el archivo: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='eml_attachment/(?P<att_index>[0-9]+)')
+    def eml_attachment(self, request, pk=None, att_index=None):
+        import email as email_lib
+        from email import policy
+        from django.http import HttpResponse
+
+        asset = self.get_object()
+        if asset.file_extension != 'eml' and asset.asset_type != Asset.AssetType.EMAIL:
+            return Response({'error': 'No es un archivo .eml'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            att_index = int(att_index)
+            with asset.file.open('rb') as f:
+                msg = email_lib.message_from_binary_file(f, policy=policy.default)
+
+            current = 0
+            for part in msg.walk():
+                disposition = str(part.get('Content-Disposition', ''))
+                if 'attachment' in disposition:
+                    if current == att_index:
+                        payload = part.get_payload(decode=True)
+                        filename = part.get_filename() or 'adjunto'
+                        content_type = part.get_content_type()
+                        response = HttpResponse(payload, content_type=content_type)
+                        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+                        return response
+                    current += 1
+
+            return Response({'error': 'Adjunto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

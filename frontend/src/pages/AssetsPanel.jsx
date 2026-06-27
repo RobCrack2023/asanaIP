@@ -93,7 +93,7 @@ export default function AssetsPanel({ projectId }) {
 
   const viewEml = async (asset) => {
     const res = await api.get(`/assets/${asset.id}/parse_eml/`)
-    setEmlViewer({ ...res.data, assetName: asset.name })
+    setEmlViewer({ ...res.data, assetId: asset.id, assetName: asset.name })
   }
 
   const formatSize = (bytes) => {
@@ -245,9 +245,15 @@ export default function AssetsPanel({ projectId }) {
               <div className="eml-attachments">
                 <span className="eml-label">Adjuntos:</span>
                 {emlViewer.attachments.map((att, i) => (
-                  <span key={i} className="eml-attachment-badge">
-                    <File size={12} /> {att.filename} ({formatSize(att.size)})
-                  </span>
+                  <a
+                    key={i}
+                    className="eml-attachment-badge clickable"
+                    href={`/api/assets/${emlViewer.assetId}/eml_attachment/${att.index}/`}
+                    download={att.filename}
+                    title="Descargar adjunto"
+                  >
+                    <Download size={12} /> {att.filename} ({formatSize(att.size)})
+                  </a>
                 ))}
               </div>
             )}
