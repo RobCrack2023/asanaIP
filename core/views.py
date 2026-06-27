@@ -87,7 +87,11 @@ class TeamViewSet(viewsets.ModelViewSet):
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
-    queryset = Project.objects.all()
+    queryset = Project.objects.select_related('team', 'owner').prefetch_related(
+        'sections__tasks__assignee',
+        'sections__tasks__assigned_by',
+        'sections__tasks__subtasks',
+    ).all()
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -122,7 +126,7 @@ class SectionViewSet(viewsets.ModelViewSet):
 
 
 class TaskViewSet(viewsets.ModelViewSet):
-    queryset = Task.objects.all()
+    queryset = Task.objects.select_related('assignee', 'assigned_by', 'section__project').all()
     serializer_class = TaskSerializer
 
     def get_queryset(self):

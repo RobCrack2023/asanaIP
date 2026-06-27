@@ -47,16 +47,18 @@ export default function HomePage() {
 
   const toggleTask = async (task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    setMyTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, status: newStatus } : t))
     await api.patch(`/tasks/${task.id}/`, { status: newStatus })
-    loadTasks()
   }
 
   const acceptTask = async (taskId) => {
+    setPendingApprovals((prev) => prev.filter((t) => t.id !== taskId))
     await api.post(`/tasks/${taskId}/accept/`)
     loadTasks()
   }
 
   const rejectTask = async (taskId) => {
+    setPendingApprovals((prev) => prev.filter((t) => t.id !== taskId))
     await api.post(`/tasks/${taskId}/reject/`)
     loadTasks()
   }

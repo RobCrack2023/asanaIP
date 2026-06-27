@@ -10,7 +10,7 @@ import './KanbanView.css'
 
 const PRIORITY_COLORS = { urgent: '#e8384f', high: '#fd9a00', medium: '#4573d2', low: '#9ca0a5' }
 
-export default function KanbanView({ project, onReload, onSelectTask, users }) {
+export default function KanbanView({ project, setProject, onSelectTask, users }) {
   const [activeTask, setActiveTask] = useState(null)
   const [addingToSection, setAddingToSection] = useState(null)
   const [newTitle, setNewTitle] = useState('')
@@ -64,21 +64,39 @@ export default function KanbanView({ project, onReload, onSelectTask, users }) {
       section: targetSectionId,
     }))
 
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => {
+        if (s.id === targetSectionId) {
+          return { ...s, tasks: sectionTasks.map((t, i) => ({ ...t, order: i, section: targetSectionId })) }
+        }
+        if (s.id === task.sectionId && s.id !== targetSectionId) {
+          return { ...s, tasks: s.tasks.filter((t) => t.id !== task.id) }
+        }
+        return s
+      }),
+    }))
+
     await api.post('/tasks/reorder/', { order })
-    onReload()
   }
 
   const addTask = async (sectionId) => {
     if (!newTitle.trim()) return
+    const title = newTitle
+    setNewTitle('')
+    setAddingToSection(null)
     const sectionTasks = allTasks.filter((t) => t.sectionId === sectionId)
-    await api.post('/tasks/', {
-      title: newTitle,
+    const res = await api.post('/tasks/', {
+      title,
       section: sectionId,
       order: sectionTasks.length,
     })
-    setNewTitle('')
-    setAddingToSection(null)
-    onReload()
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) =>
+        s.id === sectionId ? { ...s, tasks: [...s.tasks, res.data] } : s
+      ),
+    }))
   }
 
   return (

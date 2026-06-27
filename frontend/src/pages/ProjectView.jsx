@@ -59,51 +59,87 @@ export default function ProjectView() {
 
   const addTask = async (sectionId) => {
     if (!newTaskTitle.trim()) return
-    await api.post('/tasks/', {
-      title: newTaskTitle,
+    const title = newTaskTitle
+    setNewTaskTitle('')
+    setAddingTaskSection(null)
+    const res = await api.post('/tasks/', {
+      title,
       section: sectionId,
       order: project.sections.find((s) => s.id === sectionId)?.tasks.length || 0,
     })
-    setNewTaskTitle('')
-    setAddingTaskSection(null)
-    loadProject()
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) =>
+        s.id === sectionId ? { ...s, tasks: [...s.tasks, res.data] } : s
+      ),
+    }))
   }
 
   const addSection = async () => {
     if (!newSectionName.trim()) return
-    await api.post('/sections/', {
-      name: newSectionName,
+    const name = newSectionName
+    setNewSectionName('')
+    setAddingSection(false)
+    const res = await api.post('/sections/', {
+      name,
       project: parseInt(projectId),
       order: project.sections.length,
     })
-    setNewSectionName('')
-    setAddingSection(false)
-    loadProject()
+    setProject((prev) => ({
+      ...prev,
+      sections: [...prev.sections, { ...res.data, tasks: res.data.tasks || [] }],
+    }))
+  }
+
+  const updateProjectTasks = (updater) => {
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        tasks: updater(s.tasks, s.id),
+      })),
+    }))
   }
 
   const toggleTaskStatus = async (task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
-    await api.patch(`/tasks/${task.id}/`, { status: newStatus })
-    loadProject()
+    updateProjectTasks((tasks) =>
+      tasks.map((t) => t.id === task.id ? { ...t, status: newStatus } : t)
+    )
     if (selectedTask?.id === task.id) {
       setSelectedTask((prev) => ({ ...prev, status: newStatus }))
+    }
+    await api.patch(`/tasks/${task.id}/`, { status: newStatus })
+    if (task.recurrence_type && task.recurrence_type !== 'none' && newStatus === 'completed') {
+      const res = await api.get(`/tasks/?section=${task.section}&parent=none`)
+      setProject((prev) => ({
+        ...prev,
+        sections: prev.sections.map((s) =>
+          s.id === task.section ? { ...s, tasks: res.data } : s
+        ),
+      }))
     }
   }
 
   const updateTask = async (taskId, data) => {
+    updateProjectTasks((tasks) =>
+      tasks.map((t) => t.id === taskId ? { ...t, ...data } : t)
+    )
     await api.patch(`/tasks/${taskId}/`, data)
-    loadProject()
   }
 
   const deleteTask = async (taskId) => {
-    await api.delete(`/tasks/${taskId}/`)
+    updateProjectTasks((tasks) => tasks.filter((t) => t.id !== taskId))
     if (selectedTask?.id === taskId) setSelectedTask(null)
-    loadProject()
+    await api.delete(`/tasks/${taskId}/`)
   }
 
   const deleteSection = async (sectionId) => {
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.filter((s) => s.id !== sectionId),
+    }))
     await api.delete(`/sections/${sectionId}/`)
-    loadProject()
   }
 
   const handleListDragStart = (event) => {
@@ -132,8 +168,21 @@ export default function ProjectView() {
     const order = sectionTasks.map((t, i) => ({
       id: t.id, order: i, section: targetSectionId,
     }))
+
+    setProject((prev) => ({
+      ...prev,
+      sections: prev.sections.map((s) => {
+        if (s.id === targetSectionId) {
+          return { ...s, tasks: sectionTasks.map((t, i) => ({ ...t, order: i, section: targetSectionId })) }
+        }
+        if (s.id === draggedTask._sectionId && s.id !== targetSectionId) {
+          return { ...s, tasks: s.tasks.filter((t) => t.id !== draggedTask.id) }
+        }
+        return s
+      }),
+    }))
+
     await api.post('/tasks/reorder/', { order })
-    loadProject()
   }
 
   useEffect(() => {
@@ -156,6 +205,13 @@ export default function ProjectView() {
         <div className="project-title-row">
           <div className="project-color-dot" style={{ background: project.color }} />
           <h1>{project.name}</h1>
+          <button className="add-task-header-btn" onClick={() => {
+            if (viewMode === 'assets') setViewMode('list')
+            const firstSection = project.sections[0]
+            if (firstSection) { setAddingTaskSection(firstSection.id); setNewTaskTitle('') }
+          }}>
+            <Plus size={14} /> Nueva tarea
+          </button>
           <div className="view-switcher">
             <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')} title="Vista lista">
               <List size={16} />
@@ -284,7 +340,7 @@ export default function ProjectView() {
       ) : (
         <KanbanView
           project={project}
-          onReload={loadProject}
+          setProject={setProject}
           onSelectTask={setSelectedTask}
           users={users}
         />

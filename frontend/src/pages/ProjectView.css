@@ -27,6 +27,23 @@
   flex: 1;
 }
 
+.add-task-header-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  background: var(--accent);
+  color: white;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.add-task-header-btn:hover {
+  background: var(--accent-hover);
+}
+
 .view-switcher {
   display: flex;
   gap: 2px;
@@ -149,11 +166,15 @@
   border-radius: 4px;
   display: flex;
   align-items: center;
+  transition: color 0.15s;
+}
+
+.section-action.danger {
   opacity: 0;
   transition: opacity 0.15s;
 }
 
-.section-header:hover .section-action {
+.section-header:hover .section-action.danger {
   opacity: 1;
 }
 
