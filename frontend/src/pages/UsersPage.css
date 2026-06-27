@@ -1,0 +1,258 @@
+.users-page {
+  padding: 32px 40px;
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.users-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.users-header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.users-header p {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.users-header .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.users-toolbar {
+  margin-bottom: 16px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: white;
+  max-width: 400px;
+  color: var(--text-muted);
+}
+
+.search-box input {
+  border: none;
+  outline: none;
+  flex: 1;
+  font-size: 13px;
+}
+
+/* Table */
+.users-table {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.users-table-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: #faf9f8;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.users-table-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f3f2f1;
+  transition: background 0.1s;
+}
+
+.users-table-row:last-child {
+  border-bottom: none;
+}
+
+.users-table-row:hover {
+  background: var(--content-bg-hover);
+}
+
+.users-table-row.inactive {
+  opacity: 0.55;
+}
+
+.ut-col-name {
+  width: 180px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ut-col-title { width: 130px; min-width: 100px; font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ut-col-teams { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; min-width: 80px; }
+.ut-col-status { width: 100px; min-width: 100px; display: flex; gap: 4px; flex-wrap: wrap; }
+.ut-col-actions { width: 60px; min-width: 60px; display: flex; gap: 4px; justify-content: flex-end; }
+
+.ut-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ut-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ut-username {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ut-team-badge {
+  font-size: 11px;
+  background: var(--tag-bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ut-no-team {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ut-status-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.ut-status-badge.active {
+  background: #e6f4ea;
+  color: var(--success);
+}
+
+.ut-status-badge.inactive {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.ut-status-badge.admin {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.ut-action-btn {
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.ut-action-btn:hover {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.ut-action-btn.danger:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.users-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Form styles */
+.form-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.form-row .modal-field {
+  flex: 1;
+}
+
+.form-error {
+  background: #fef2f2;
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  border: 1px solid #fee2e2;
+}
+
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px !important;
+  cursor: pointer;
+  padding-top: 8px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.team-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.team-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: white;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+}
+
+.team-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.team-chip.selected {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
