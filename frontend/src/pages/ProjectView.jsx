@@ -73,6 +73,7 @@ export default function ProjectView() {
         s.id === sectionId ? { ...s, tasks: [...s.tasks, res.data] } : s
       ),
     }))
+    setSelectedTask(res.data)
   }
 
   const addSection = async () => {
@@ -122,8 +123,13 @@ export default function ProjectView() {
   }
 
   const updateTask = async (taskId, data) => {
+    const enriched = { ...data }
+    if ('assignee' in data) {
+      const user = users.find((u) => String(u.id) === String(data.assignee))
+      enriched.assignee_name = user ? user.full_name : null
+    }
     updateProjectTasks((tasks) =>
-      tasks.map((t) => t.id === taskId ? { ...t, ...data } : t)
+      tasks.map((t) => t.id === taskId ? { ...t, ...enriched } : t)
     )
     await api.patch(`/tasks/${taskId}/`, data)
   }
@@ -353,8 +359,13 @@ export default function ProjectView() {
             users={users}
             onClose={() => setSelectedTask(null)}
             onUpdate={(data) => {
+              const enriched = { ...data }
+              if ('assignee' in data) {
+                const user = users.find((u) => String(u.id) === String(data.assignee))
+                enriched.assignee_name = user ? user.full_name : null
+              }
               updateTask(selectedTask.id, data)
-              setSelectedTask((prev) => ({ ...prev, ...data }))
+              setSelectedTask((prev) => ({ ...prev, ...enriched }))
             }}
             onDelete={() => deleteTask(selectedTask.id)}
           />
@@ -521,12 +532,12 @@ function TaskDetail({ task, users, onClose, onUpdate, onDelete }) {
         <div className="detail-field">
           <label>Responsable</label>
           <select
-            value={task.assignee || ''}
-            onChange={(e) => onUpdate({ assignee: e.target.value || null })}
+            value={task.assignee != null ? String(task.assignee) : ''}
+            onChange={(e) => onUpdate({ assignee: e.target.value ? Number(e.target.value) : null })}
           >
             <option value="">Sin asignar</option>
             {users.map((u) => (
-              <option key={u.id} value={u.id}>{u.full_name}</option>
+              <option key={u.id} value={String(u.id)}>{u.full_name}</option>
             ))}
           </select>
         </div>
