@@ -1,0 +1,297 @@
+.assets-panel {
+  padding: 16px 0;
+}
+
+.assets-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 32px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.assets-upload-btn,
+.assets-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.assets-upload-btn {
+  background: var(--accent);
+  color: white;
+}
+
+.assets-upload-btn:hover {
+  background: var(--accent-hover);
+}
+
+.assets-link-btn {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.assets-link-btn:hover {
+  background: var(--border-color);
+}
+
+.assets-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.assets-filter {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.assets-filter:hover {
+  background: var(--tag-bg);
+}
+
+.assets-filter.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Link form */
+.assets-link-form {
+  margin: 0 32px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #faf9f8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assets-link-form input {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+
+.assets-link-form input:focus {
+  border-color: var(--accent);
+}
+
+.assets-link-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+/* Grid */
+.assets-grid {
+  padding: 0 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.asset-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  transition: all 0.15s;
+}
+
+.asset-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.asset-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.asset-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.asset-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.asset-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.asset-card:hover .asset-actions {
+  opacity: 1;
+}
+
+.asset-action-btn {
+  padding: 5px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.asset-action-btn:hover {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.asset-action-btn.danger:hover {
+  color: var(--danger);
+  background: #fef2f2;
+}
+
+.assets-empty {
+  text-align: center;
+  padding: 40px 32px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* EML Viewer */
+.eml-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.eml-viewer {
+  background: white;
+  border-radius: 12px;
+  width: 700px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: modalIn 0.15s ease-out;
+}
+
+.eml-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  color: #7c3aed;
+}
+
+.eml-subject {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eml-fields {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.eml-field {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.eml-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 45px;
+}
+
+.eml-attachments {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.eml-attachment-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--tag-bg);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.eml-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 200px;
+}
+
+.eml-iframe {
+  width: 100%;
+  height: 400px;
+  border: none;
+}
+
+.eml-text {
+  padding: 16px 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  font-family: inherit;
+  margin: 0;
+}

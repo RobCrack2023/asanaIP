@@ -5,10 +5,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
 
-from .models import User, Area, Team, Project, Section, Task
+from .models import User, Area, Team, Project, Section, Task, Asset
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
+    AssetSerializer,
 )
 
 
@@ -240,3 +241,98 @@ class TaskViewSet(viewsets.ModelViewSet):
                 section_id=item.get('section', None) or Task.objects.get(pk=item['id']).section_id,
             )
         return Response({'ok': True})
+
+
+class AssetViewSet(viewsets.ModelViewSet):
+    queryset = Asset.objects.all()
+    serializer_class = AssetSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        project_id = self.request.query_params.get('project')
+        task_id = self.request.query_params.get('task')
+        category = self.request.query_params.get('category')
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        if task_id:
+            qs = qs.filter(task_id=task_id)
+        if category:
+            if category == 'email':
+                qs = qs.filter(asset_type=Asset.AssetType.EMAIL)
+            elif category == 'link':
+                qs = qs.filter(asset_type=Asset.AssetType.LINK)
+            else:
+                qs = qs.filter(asset_type=Asset.AssetType.FILE).exclude(mime_type='message/rfc822')
+        return qs
+
+    def perform_create(self, serializer):
+        asset = serializer.save(uploaded_by=self.request.user)
+        if asset.file:
+            asset.file_size = asset.file.size
+            import mimetypes
+            mime, _ = mimetypes.guess_type(asset.file.name)
+            asset.mime_type = mime or ''
+            if asset.file_extension == 'eml':
+                asset.asset_type = Asset.AssetType.EMAIL
+                asset.mime_type = 'message/rfc822'
+            if not asset.name or asset.name == 'undefined':
+                asset.name = asset.file.name.split('/')[-1]
+            asset.save()
+
+    @action(detail=True, methods=['get'])
+    def parse_eml(self, request, pk=None):
+        import email as email_lib
+        from email import policy
+        import base64
+
+        asset = self.get_object()
+        if asset.file_extension != 'eml' and asset.asset_type != Asset.AssetType.EMAIL:
+            return Response({'error': 'No es un archivo .eml'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with asset.file.open('rb') as f:
+                msg = email_lib.message_from_binary_file(f, policy=policy.default)
+
+            result = {
+                'subject': str(msg.get('subject', '')),
+                'from': str(msg.get('from', '')),
+                'to': str(msg.get('to', '')),
+                'cc': str(msg.get('cc', '')) or None,
+                'date': str(msg.get('date', '')),
+                'body_text': '',
+                'body_html': '',
+                'attachments': [],
+            }
+
+            if msg.is_multipart():
+                for part in msg.walk():
+                    content_type = part.get_content_type()
+                    disposition = str(part.get('Content-Disposition', ''))
+
+                    if 'attachment' in disposition:
+                        filename = part.get_filename() or 'adjunto'
+                        payload = part.get_payload(decode=True)
+                        result['attachments'].append({
+                            'filename': filename,
+                            'content_type': content_type,
+                            'size': len(payload) if payload else 0,
+                        })
+                    elif content_type == 'text/plain' and not result['body_text']:
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            result['body_text'] = payload.decode('utf-8', errors='replace')
+                    elif content_type == 'text/html' and not result['body_html']:
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            result['body_html'] = payload.decode('utf-8', errors='replace')
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    if msg.get_content_type() == 'text/html':
+                        result['body_html'] = payload.decode('utf-8', errors='replace')
+                    else:
+                        result['body_text'] = payload.decode('utf-8', errors='replace')
+
+            return Response(result)
+        except Exception as e:
+            return Response({'error': f'Error al parsear el archivo: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)

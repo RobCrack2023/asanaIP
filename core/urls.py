@@ -9,6 +9,7 @@ router.register(r'teams', views.TeamViewSet)
 router.register(r'projects', views.ProjectViewSet)
 router.register(r'sections', views.SectionViewSet)
 router.register(r'tasks', views.TaskViewSet)
+router.register(r'assets', views.AssetViewSet)
 
 urlpatterns = [
     path('auth/login/', views.login_view, name='login'),

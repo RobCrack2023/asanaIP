@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Area, Team, Project, Section, Task
+from .models import User, Area, Team, Project, Section, Task, Asset
 
 
 @admin.register(User)
@@ -40,3 +40,9 @@ class TaskAdmin(admin.ModelAdmin):
     list_display = ['title', 'section', 'assignee', 'priority', 'status', 'start_date', 'due_date']
     list_filter = ['status', 'priority', 'section__project']
     search_fields = ['title', 'description']
+
+
+@admin.register(Asset)
+class AssetAdmin(admin.ModelAdmin):
+    list_display = ['name', 'asset_type', 'project', 'uploaded_by', 'created_at']
+    list_filter = ['asset_type', 'project']

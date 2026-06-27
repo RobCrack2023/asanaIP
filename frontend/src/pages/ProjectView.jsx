@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  Plus, Check, ChevronDown, ChevronRight, Calendar, User,
+  Plus, Check, ChevronDown, ChevronRight, Calendar, User, File,
   Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock,
 } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core'
@@ -9,6 +9,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import api from '../api'
 import KanbanView from './KanbanView'
+import AssetsPanel from './AssetsPanel'
 import './ProjectView.css'
 
 const PRIORITY_CONFIG = {
@@ -162,12 +163,17 @@ export default function ProjectView() {
             <button className={`view-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')} title="Vista tablero">
               <LayoutGrid size={16} />
             </button>
+            <button className={`view-btn ${viewMode === 'assets' ? 'active' : ''}`} onClick={() => setViewMode('assets')} title="Assets">
+              <File size={16} />
+            </button>
           </div>
         </div>
         {project.description && <p className="project-description">{project.description}</p>}
       </div>
 
-      {viewMode === 'list' ? (
+      {viewMode === 'assets' ? (
+        <AssetsPanel projectId={parseInt(projectId)} />
+      ) : viewMode === 'list' ? (
         <div className="project-content-wrapper">
           <DndContext
             sensors={sensors}

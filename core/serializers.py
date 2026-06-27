@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Area, Team, Project, Section, Task
+from .models import User, Area, Team, Project, Section, Task, Asset
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -117,3 +117,16 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
     def get_tasks_count(self, obj):
         return Task.objects.filter(section__project=obj).count()
+
+
+class AssetSerializer(serializers.ModelSerializer):
+    uploaded_by_name = serializers.CharField(source='uploaded_by.get_full_name', read_only=True, default=None)
+    category = serializers.CharField(read_only=True)
+    file_extension = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Asset
+        fields = ['id', 'project', 'task', 'asset_type', 'name', 'file', 'url',
+                  'file_size', 'mime_type', 'category', 'file_extension',
+                  'uploaded_by', 'uploaded_by_name', 'created_at']
+        read_only_fields = ['id', 'file_size', 'mime_type', 'uploaded_by', 'created_at']
