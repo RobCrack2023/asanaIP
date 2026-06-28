@@ -7,6 +7,7 @@ import ProjectView from './pages/ProjectView'
 import HomePage from './pages/HomePage'
 import UsersPage from './pages/UsersPage'
 import AreaView from './pages/AreaView'
+import SuperAdminPage from './pages/SuperAdminPage'
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -23,6 +24,10 @@ export default function App() {
 
   if (!user) {
     return <LoginPage onLogin={setUser} />
+  }
+
+  if (user.is_super_admin) {
+    return <SuperAdminPage user={user} onLogout={() => { api.post('/auth/logout/'); setUser(null) }} />
   }
 
   return (

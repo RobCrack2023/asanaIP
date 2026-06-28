@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog } from 'lucide-react'
+import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield } from 'lucide-react'
 import api from '../api'
 import Modal from './Modal'
 import './Sidebar.css'
@@ -64,16 +64,20 @@ export default function Sidebar({ user, onLogout }) {
           <span>Inicio</span>
         </button>
 
-        <button className={`nav-item ${location.pathname === '/users' ? 'active' : ''}`} onClick={() => navigate('/users')}>
-          <UserCog size={16} />
-          <span>Usuarios</span>
-        </button>
+        {user.is_staff && (
+          <button className={`nav-item ${location.pathname === '/users' ? 'active' : ''}`} onClick={() => navigate('/users')}>
+            <UserCog size={16} />
+            <span>Usuarios</span>
+          </button>
+        )}
 
         <div className="nav-section-label">
-          <span>Organización</span>
-          <button className="nav-section-add" onClick={() => setModal({ type: 'area' })} title="Nueva área">
-            <Plus size={13} />
-          </button>
+          <span>{user.is_staff ? 'Organización' : 'Mis equipos'}</span>
+          {user.is_staff && (
+            <button className="nav-section-add" onClick={() => setModal({ type: 'area' })} title="Nueva área">
+              <Plus size={13} />
+            </button>
+          )}
         </div>
 
         {areas.map((area) => (
@@ -84,9 +88,11 @@ export default function Sidebar({ user, onLogout }) {
               </button>
               <div className="area-dot" style={{ background: area.color }} />
               <span className="nav-area-link" onClick={() => navigate(`/area/${area.id}`)}>{area.name}</span>
-              <button className="nav-inline-add" onClick={() => setModal({ type: 'team', areaId: area.id })} title="Nuevo equipo">
-                <Plus size={12} />
-              </button>
+              {user.is_staff && (
+                <button className="nav-inline-add" onClick={() => setModal({ type: 'team', areaId: area.id })} title="Nuevo equipo">
+                  <Plus size={12} />
+                </button>
+              )}
             </div>
 
             {expandedAreas[area.id] && getTeamsByArea(area.id).map((team) => (
@@ -96,9 +102,11 @@ export default function Sidebar({ user, onLogout }) {
                   <Users size={14} />
                   <span>{team.name}</span>
                   <span className="nav-badge">{team.members_count}</span>
-                  <button className="nav-inline-add" onClick={(e) => { e.stopPropagation(); setModal({ type: 'project', teamId: team.id }) }} title="Nuevo proyecto">
-                    <Plus size={12} />
-                  </button>
+                  {user.is_staff && (
+                    <button className="nav-inline-add" onClick={(e) => { e.stopPropagation(); setModal({ type: 'project', teamId: team.id }) }} title="Nuevo proyecto">
+                      <Plus size={12} />
+                    </button>
+                  )}
                 </div>
 
                 {expandedTeams[team.id] && getProjectsByTeam(team.id).map((project) => (

@@ -1,5 +1,23 @@
 from rest_framework import serializers
-from .models import User, Area, Team, Project, Section, Task, Asset
+from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
+
+
+class PlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Plan
+        fields = ['id', 'name', 'max_users', 'max_projects', 'price']
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    plan_name = serializers.CharField(source='plan.name', read_only=True, default=None)
+    users_count = serializers.IntegerField(read_only=True)
+    projects_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Organization
+        fields = ['id', 'name', 'slug', 'logo', 'plan', 'plan_name',
+                  'max_users', 'is_active', 'users_count', 'projects_count', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -11,7 +29,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name',
                   'full_name', 'avatar', 'job_title', 'is_active', 'is_staff',
-                  'password', 'teams']
+                  'is_super_admin', 'organization', 'password', 'teams']
         read_only_fields = ['id']
 
     def get_full_name(self, obj):

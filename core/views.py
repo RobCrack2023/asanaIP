@@ -5,12 +5,18 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
 
-from .models import User, Area, Team, Project, Section, Task, Asset
+from rest_framework.permissions import BasePermission
+from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
-    AssetSerializer,
+    AssetSerializer, OrganizationSerializer, PlanSerializer,
 )
+
+
+class IsSuperAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.is_super_admin
 
 
 @api_view(['POST'])
@@ -33,22 +39,48 @@ def logout_view(request):
 
 @api_view(['GET'])
 def me_view(request):
-    return Response(UserSerializer(request.user).data)
+    data = UserSerializer(request.user).data
+    if request.user.organization:
+        data['organization_name'] = request.user.organization.name
+        data['organization_slug'] = request.user.organization.slug
+    return Response(data)
 
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_super_admin:
+            qs = qs.filter(organization=user.organization)
+        return qs
+
 
 class AreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all()
     serializer_class = AreaSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.is_super_admin or user.is_staff:
+            qs = qs.filter(organization=user.organization)
+        else:
+            my_team_ids = user.teams.values_list('id', flat=True)
+            qs = qs.filter(teams__id__in=my_team_ids).distinct()
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
+
     @action(detail=True, methods=['get'])
     def teams(self, request, pk=None):
         area = self.get_object()
         teams = area.teams.all()
+        if not request.user.is_staff and not request.user.is_super_admin:
+            teams = teams.filter(members=request.user)
         return Response(TeamSerializer(teams, many=True).data)
 
 
@@ -58,6 +90,11 @@ class TeamViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+        if user.is_super_admin or user.is_staff:
+            qs = qs.filter(area__organization=user.organization)
+        else:
+            qs = qs.filter(members=user)
         area_id = self.request.query_params.get('area')
         if area_id:
             qs = qs.filter(area_id=area_id)
@@ -100,6 +137,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+        if user.is_super_admin or user.is_staff:
+            qs = qs.filter(team__area__organization=user.organization)
+        else:
+            qs = qs.filter(team__members=user)
         team_id = self.request.query_params.get('team')
         if team_id:
             qs = qs.filter(team_id=team_id)
@@ -375,3 +417,40 @@ class AssetViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Adjunto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PlanViewSet(viewsets.ModelViewSet):
+    queryset = Plan.objects.all()
+    serializer_class = PlanSerializer
+    permission_classes = [IsSuperAdmin]
+
+
+class OrganizationViewSet(viewsets.ModelViewSet):
+    queryset = Organization.objects.all()
+    serializer_class = OrganizationSerializer
+    permission_classes = [IsSuperAdmin]
+
+    @action(detail=True, methods=['get'])
+    def users(self, request, pk=None):
+        org = self.get_object()
+        users = org.members.all()
+        return Response(UserSerializer(users, many=True).data)
+
+    @action(detail=True, methods=['post'])
+    def add_user(self, request, pk=None):
+        org = self.get_object()
+        if org.members.filter(is_active=True).count() >= org.max_users:
+            return Response({'error': f'Límite de {org.max_users} usuarios alcanzado'}, status=status.HTTP_400_BAD_REQUEST)
+        user_data = request.data
+        password = user_data.pop('password', 'changeme123')
+        user = User.objects.create(**user_data, organization=org)
+        user.set_password(password)
+        user.save()
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        org = self.get_object()
+        org.is_active = not org.is_active
+        org.save()
+        return Response(OrganizationSerializer(org).data)

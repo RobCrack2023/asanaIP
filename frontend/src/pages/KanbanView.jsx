@@ -10,7 +10,7 @@ import './KanbanView.css'
 
 const PRIORITY_COLORS = { urgent: '#e8384f', high: '#fd9a00', medium: '#4573d2', low: '#9ca0a5' }
 
-export default function KanbanView({ project, setProject, onSelectTask, users }) {
+export default function KanbanView({ project, setProject, onSelectTask, users, filterTasks = (t) => t }) {
   const [activeTask, setActiveTask] = useState(null)
   const [addingToSection, setAddingToSection] = useState(null)
   const [newTitle, setNewTitle] = useState('')
@@ -108,7 +108,7 @@ export default function KanbanView({ project, setProject, onSelectTask, users })
     >
       <div className="kanban-board">
         {project.sections.map((section) => {
-          const sectionTasks = section.tasks.filter((t) => !t.parent)
+          const sectionTasks = filterTasks(section.tasks.filter((t) => !t.parent))
           return (
             <KanbanColumn
               key={section.id}

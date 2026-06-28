@@ -2,9 +2,45 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 
+class Plan(models.Model):
+    name = models.CharField(max_length=50)
+    max_users = models.PositiveIntegerField(default=10)
+    max_projects = models.PositiveIntegerField(default=20)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    def __str__(self):
+        return self.name
+
+
+class Organization(models.Model):
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(unique=True)
+    logo = models.ImageField(upload_to='org_logos/', blank=True, null=True)
+    plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, blank=True)
+    max_users = models.PositiveIntegerField(default=10)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def users_count(self):
+        return self.members.filter(is_active=True).count()
+
+    @property
+    def projects_count(self):
+        return Project.objects.filter(team__area__organization=self).count()
+
+
 class User(AbstractUser):
     avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
     job_title = models.CharField(max_length=100, blank=True)
+    organization = models.ForeignKey(Organization, on_delete=models.SET_NULL, null=True, blank=True, related_name='members')
+    is_super_admin = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['first_name', 'last_name']
@@ -17,6 +53,7 @@ class Area(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     color = models.CharField(max_length=7, default='#4573D2')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='areas', null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -37,6 +37,8 @@ export default function ProjectView() {
   const [selectedTask, setSelectedTask] = useState(null)
   const [viewMode, setViewMode] = useState('list')
   const [dragActiveTask, setDragActiveTask] = useState(null)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [showOnlyMine, setShowOnlyMine] = useState(false)
   const newTaskRef = useRef(null)
   const newSectionRef = useRef(null)
 
@@ -51,7 +53,18 @@ export default function ProjectView() {
   useEffect(() => {
     loadProject()
     api.get('/users/').then((res) => setUsers(res.data))
+    api.get('/auth/me/').then((res) => {
+      setCurrentUser(res.data)
+      if (!res.data.is_staff && !res.data.is_super_admin) {
+        setShowOnlyMine(true)
+      }
+    })
   }, [projectId])
+
+  const filterTasks = (tasks) => {
+    if (!showOnlyMine || !currentUser) return tasks
+    return tasks.filter((t) => t.assignee === currentUser.id)
+  }
 
   const toggleSection = (sectionId) => {
     setCollapsedSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }))
@@ -218,6 +231,14 @@ export default function ProjectView() {
           }}>
             <Plus size={14} /> Nueva tarea
           </button>
+          <div className="task-filter-toggle">
+            <button className={`filter-toggle-btn ${showOnlyMine ? 'active' : ''}`} onClick={() => setShowOnlyMine(true)}>
+              <User size={13} /> Mis tareas
+            </button>
+            <button className={`filter-toggle-btn ${!showOnlyMine ? 'active' : ''}`} onClick={() => setShowOnlyMine(false)}>
+              Todas
+            </button>
+          </div>
           <div className="view-switcher">
             <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')} title="Vista lista">
               <List size={16} />
@@ -253,7 +274,7 @@ export default function ProjectView() {
               </div>
 
               {project.sections.map((section) => {
-                const sectionTasks = section.tasks.filter((t) => !t.parent)
+                const sectionTasks = filterTasks(section.tasks.filter((t) => !t.parent))
                 return (
                   <div key={section.id} className="section-group">
                     <div className="section-header">
@@ -349,6 +370,7 @@ export default function ProjectView() {
           setProject={setProject}
           onSelectTask={setSelectedTask}
           users={users}
+          filterTasks={filterTasks}
         />
       )}
 

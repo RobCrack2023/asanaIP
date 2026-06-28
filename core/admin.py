@@ -1,6 +1,18 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Area, Team, Project, Section, Task, Asset
+from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = ['name', 'max_users', 'max_projects', 'price']
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'plan', 'max_users', 'is_active', 'created_at']
+    list_filter = ['is_active', 'plan']
+    prepopulated_fields = {'slug': ('name',)}
 
 
 @admin.register(User)
