@@ -353,6 +353,18 @@ class AssetViewSet(viewsets.ModelViewSet):
                 'attachments': [],
             }
 
+            def decode_payload(part):
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    return ''
+                charset = part.get_content_charset() or 'utf-8'
+                for enc in [charset, 'utf-8', 'latin-1', 'windows-1252']:
+                    try:
+                        return payload.decode(enc)
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                return payload.decode('utf-8', errors='replace')
+
             att_index = 0
             if msg.is_multipart():
                 for part in msg.walk():
@@ -370,20 +382,15 @@ class AssetViewSet(viewsets.ModelViewSet):
                         })
                         att_index += 1
                     elif content_type == 'text/plain' and not result['body_text']:
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            result['body_text'] = payload.decode('utf-8', errors='replace')
+                        result['body_text'] = decode_payload(part)
                     elif content_type == 'text/html' and not result['body_html']:
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            result['body_html'] = payload.decode('utf-8', errors='replace')
+                        result['body_html'] = decode_payload(part)
             else:
-                payload = msg.get_payload(decode=True)
-                if payload:
-                    if msg.get_content_type() == 'text/html':
-                        result['body_html'] = payload.decode('utf-8', errors='replace')
-                    else:
-                        result['body_text'] = payload.decode('utf-8', errors='replace')
+                text = decode_payload(msg)
+                if msg.get_content_type() == 'text/html':
+                    result['body_html'] = text
+                else:
+                    result['body_text'] = text
 
             return Response(result)
         except Exception as e:
@@ -418,6 +425,78 @@ class AssetViewSet(viewsets.ModelViewSet):
                     current += 1
 
             return Response({'error': 'Adjunto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def preview(self, request, pk=None):
+        from django.http import HttpResponse
+        asset = self.get_object()
+        if not asset.file:
+            return Response({'error': 'No hay archivo'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ext = asset.file_extension
+        try:
+            if ext in ('jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'):
+                return Response({'type': 'image', 'url': asset.file.url})
+
+            if ext == 'pdf':
+                return Response({'type': 'pdf', 'url': asset.file.url})
+
+            if ext in ('txt', 'csv', 'log', 'md', 'json', 'xml', 'html', 'css', 'js', 'py'):
+                with asset.file.open('rb') as f:
+                    raw = f.read()
+                for enc in ['utf-8', 'latin-1', 'windows-1252']:
+                    try:
+                        content = raw.decode(enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    content = raw.decode('utf-8', errors='replace')
+                return Response({'type': 'text', 'content': content, 'filename': asset.name})
+
+            if ext in ('xlsx', 'xls'):
+                import openpyxl
+                wb = openpyxl.load_workbook(asset.file.path, read_only=True, data_only=True)
+                sheets = []
+                for ws in wb.worksheets:
+                    rows = []
+                    for row in ws.iter_rows(max_row=200, values_only=True):
+                        rows.append([str(cell) if cell is not None else '' for cell in row])
+                    sheets.append({'name': ws.title, 'rows': rows})
+                wb.close()
+                return Response({'type': 'excel', 'sheets': sheets, 'filename': asset.name})
+
+            if ext in ('docx',):
+                import docx
+                from html import escape
+                doc = docx.Document(asset.file.path)
+                html_parts = ['<meta charset="utf-8">']
+                for para in doc.paragraphs:
+                    style = para.style.name if para.style else ''
+                    text = escape(para.text)
+                    if not text.strip():
+                        html_parts.append('<br>')
+                    elif 'Heading 1' in style:
+                        html_parts.append(f'<h1>{text}</h1>')
+                    elif 'Heading 2' in style:
+                        html_parts.append(f'<h2>{text}</h2>')
+                    elif 'Heading 3' in style:
+                        html_parts.append(f'<h3>{text}</h3>')
+                    else:
+                        html_parts.append(f'<p>{text}</p>')
+                for table in doc.tables:
+                    html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%">')
+                    for row in table.rows:
+                        html_parts.append('<tr>')
+                        for cell in row.cells:
+                            html_parts.append(f'<td>{escape(cell.text)}</td>')
+                        html_parts.append('</tr>')
+                    html_parts.append('</table>')
+                return Response({'type': 'word', 'html': '\n'.join(html_parts), 'filename': asset.name}, content_type='application/json; charset=utf-8')
+
+            return Response({'type': 'unsupported', 'message': 'Vista previa no disponible para este tipo de archivo'})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

@@ -91,9 +91,25 @@ export default function AssetsPanel({ projectId }) {
     load()
   }
 
+  const [fileViewer, setFileViewer] = useState(null)
+
   const viewEml = async (asset) => {
     const res = await api.get(`/assets/${asset.id}/parse_eml/`)
     setEmlViewer({ ...res.data, assetId: asset.id, assetName: asset.name })
+  }
+
+  const viewFile = async (asset) => {
+    if (asset.category === 'email') return viewEml(asset)
+    try {
+      const res = await api.get(`/assets/${asset.id}/preview/`)
+      if (res.data.type === 'unsupported') {
+        window.open(asset.file, '_blank')
+        return
+      }
+      setFileViewer({ ...res.data, assetName: asset.name })
+    } catch {
+      window.open(asset.file, '_blank')
+    }
   }
 
   const formatSize = (bytes) => {
@@ -176,7 +192,7 @@ export default function AssetsPanel({ projectId }) {
             const Icon = CATEGORY_ICONS[asset.category] || File
             const color = CATEGORY_COLORS[asset.category] || '#9ca0a5'
             return (
-              <div key={asset.id} className="asset-card">
+              <div key={asset.id} className="asset-card" onClick={() => { if (asset.asset_type === 'link') window.open(asset.url, '_blank'); else if (asset.file) viewFile(asset) }}>
                 <div className="asset-icon" style={{ background: color + '18', color }}>
                   <Icon size={22} />
                 </div>
@@ -189,19 +205,19 @@ export default function AssetsPanel({ projectId }) {
                   </span>
                 </div>
                 <div className="asset-actions">
-                  {asset.category === 'email' && (
-                    <button className="asset-action-btn" title="Ver correo" onClick={() => viewEml(asset)}>
-                      <Mail size={14} />
-                    </button>
-                  )}
                   {asset.asset_type === 'link' ? (
                     <a className="asset-action-btn" href={asset.url} target="_blank" rel="noopener noreferrer" title="Abrir enlace">
                       <ExternalLink size={14} />
                     </a>
                   ) : asset.file ? (
-                    <a className="asset-action-btn" href={asset.file} download title="Descargar">
-                      <Download size={14} />
-                    </a>
+                    <>
+                      <button className="asset-action-btn" title="Ver" onClick={() => viewFile(asset)}>
+                        <ExternalLink size={14} />
+                      </button>
+                      <a className="asset-action-btn" href={asset.file} download title="Descargar">
+                        <Download size={14} />
+                      </a>
+                    </>
                   ) : null}
                   <button className="asset-action-btn danger" title="Eliminar" onClick={() => deleteAsset(asset.id)}>
                     <Trash2 size={14} />
@@ -267,6 +283,52 @@ export default function AssetsPanel({ projectId }) {
                 />
               ) : (
                 <pre className="eml-text">{emlViewer.body_text || '(Sin contenido)'}</pre>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fileViewer && (
+        <div className="eml-overlay" onClick={(e) => { if (e.target === e.currentTarget) setFileViewer(null) }}>
+          <div className="file-viewer">
+            <div className="file-viewer-header">
+              <File size={18} />
+              <span className="file-viewer-title">{fileViewer.assetName}</span>
+              <button className="icon-btn" onClick={() => setFileViewer(null)}><X size={18} /></button>
+            </div>
+            <div className="file-viewer-body">
+              {fileViewer.type === 'image' && (
+                <img src={fileViewer.url} alt={fileViewer.assetName} className="file-viewer-image" />
+              )}
+              {fileViewer.type === 'pdf' && (
+                <iframe src={fileViewer.url} className="file-viewer-iframe" title={fileViewer.assetName} />
+              )}
+              {fileViewer.type === 'text' && (
+                <pre className="file-viewer-text">{fileViewer.content}</pre>
+              )}
+              {fileViewer.type === 'word' && (
+                <div className="file-viewer-word" dangerouslySetInnerHTML={{ __html: fileViewer.html }} />
+              )}
+              {fileViewer.type === 'excel' && (
+                <div className="file-viewer-excel">
+                  {fileViewer.sheets.map((sheet, si) => (
+                    <div key={si}>
+                      {fileViewer.sheets.length > 1 && <h3 className="sheet-name">{sheet.name}</h3>}
+                      <table className="excel-table">
+                        <tbody>
+                          {sheet.rows.map((row, ri) => (
+                            <tr key={ri} className={ri === 0 ? 'excel-header' : ''}>
+                              {row.map((cell, ci) => (
+                                ri === 0 ? <th key={ci}>{cell}</th> : <td key={ci}>{cell}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
