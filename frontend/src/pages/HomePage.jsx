@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FolderOpen, LayoutGrid, CheckCircle2, Clock, AlertCircle, Check, Flag, Calendar, Bell, CheckCheck, XCircle } from 'lucide-react'
+import { FolderOpen, LayoutGrid, CheckCircle2, Clock, AlertCircle, Check, Flag, Calendar, Bell, CheckCheck, XCircle, Send } from 'lucide-react'
 import api from '../api'
 import './HomePage.css'
 
@@ -15,6 +15,7 @@ export default function HomePage() {
   const [projects, setProjects] = useState([])
   const [areas, setAreas] = useState([])
   const [myTasks, setMyTasks] = useState([])
+  const [assignedByMe, setAssignedByMe] = useState([])
   const [pendingApprovals, setPendingApprovals] = useState([])
   const [taskFilter, setTaskFilter] = useState('pending')
   const navigate = useNavigate()
@@ -23,6 +24,9 @@ export default function HomePage() {
     api.get('/auth/me/').then((meRes) => {
       api.get(`/tasks/?assignee=${meRes.data.id}&parent=none`).then((res) => setMyTasks(res.data))
       api.get('/tasks/pending_assignments/').then((res) => setPendingApprovals(res.data))
+      api.get(`/tasks/?assigned_by=${meRes.data.id}&parent=none`).then((res) => {
+        setAssignedByMe(res.data.filter((t) => t.assignee !== meRes.data.id))
+      })
     })
   }
 
@@ -175,6 +179,37 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {assignedByMe.length > 0 && (
+        <div className="home-section">
+          <h2><Send size={16} /> Tareas que asigné</h2>
+          <div className="my-tasks-list">
+            {assignedByMe.map((task) => (
+              <div key={task.id} className="my-task-row">
+                <span className={`my-task-title`}>{task.title}</span>
+                <span className="assigned-to-badge">
+                  → {task.assignee_name || 'Sin asignar'}
+                </span>
+                {task.assignment_status === 'pending_approval' && (
+                  <span className="assignment-track pending">Pendiente</span>
+                )}
+                {task.assignment_status === 'accepted' && (
+                  <span className="assignment-track accepted">Aceptada</span>
+                )}
+                {task.assignment_status === 'rejected' && (
+                  <span className="assignment-track rejected">Rechazada</span>
+                )}
+                {task.assignment_status === 'direct' && (
+                  <span className="assignment-track direct">Directa</span>
+                )}
+                <span className="my-task-status" style={{ background: STATUS_CONFIG[task.status].color }}>
+                  {STATUS_CONFIG[task.status].label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="home-section">
         <h2>Proyectos recientes</h2>

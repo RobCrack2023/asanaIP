@@ -63,7 +63,7 @@ export default function ProjectView() {
 
   const filterTasks = (tasks) => {
     if (!showOnlyMine || !currentUser) return tasks
-    return tasks.filter((t) => t.assignee === currentUser.id)
+    return tasks.filter((t) => t.assignee === currentUser.id || t.assigned_by === currentUser.id)
   }
 
   const toggleSection = (sectionId) => {
@@ -463,6 +463,15 @@ function TaskRow({ task, users, onToggle, onClick, onUpdate, onDelete, isSelecte
         <span className="status-badge" style={{ background: statusConf.color }}>
           {statusConf.label}
         </span>
+        {task.assignment_status === 'pending_approval' && (
+          <span className="assignment-badge pending" title={`Pendiente de aprobación por ${task.assignee_name}`}>⏳</span>
+        )}
+        {task.assignment_status === 'accepted' && task.assigned_by_name && (
+          <span className="assignment-badge accepted" title="Asignación aceptada">✓</span>
+        )}
+        {task.assignment_status === 'rejected' && (
+          <span className="assignment-badge rejected" title="Asignación rechazada">✗</span>
+        )}
       </div>
 
       <button className="task-delete" onClick={(e) => { e.stopPropagation(); onDelete() }}>

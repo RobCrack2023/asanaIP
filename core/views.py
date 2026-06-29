@@ -195,6 +195,9 @@ class TaskViewSet(viewsets.ModelViewSet):
             qs = qs.filter(section__project_id=project_id)
         if assignee_id:
             qs = qs.filter(assignee_id=assignee_id)
+        assigned_by_id = self.request.query_params.get('assigned_by')
+        if assigned_by_id:
+            qs = qs.filter(assigned_by_id=assigned_by_id)
         if status_filter:
             qs = qs.filter(status=status_filter)
         if parent == 'none':

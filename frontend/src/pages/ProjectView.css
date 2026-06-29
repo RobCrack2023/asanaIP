@@ -281,6 +281,16 @@
   background: rgba(0, 0, 0, 0.04);
 }
 
+.assignment-badge {
+  font-size: 11px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.assignment-badge.pending { color: var(--warning); }
+.assignment-badge.accepted { color: var(--success); }
+.assignment-badge.rejected { color: var(--danger); }
+
 .private-icon {
   color: var(--text-muted);
   flex-shrink: 0;
