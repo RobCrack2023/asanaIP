@@ -7,15 +7,24 @@ echo        AsanaIP - Iniciando...
 echo ========================================
 echo.
 
+:: Copiar .env si no existe
+if not exist ".env" (
+    echo [!] No se encontro .env. Creando desde .env.example...
+    copy .env.example .env >nul
+    echo      Archivo .env creado. Editalo antes de usar en produccion.
+    echo.
+)
+
 :: Verificar que existe el entorno virtual
 if not exist "venv\Scripts\activate.bat" (
     echo [!] No se encontro el entorno virtual. Creandolo...
     python -m venv venv
     call venv\Scripts\activate.bat
-    pip install django djangorestframework django-cors-headers pillow
+    pip install django djangorestframework django-cors-headers pillow python-dotenv
     echo.
 ) else (
     call venv\Scripts\activate.bat
+    pip install python-dotenv -q
 )
 
 :: Verificar que existen las dependencias del frontend

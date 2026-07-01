@@ -101,8 +101,9 @@ El script `run.bat` hace todo automáticamente:
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # Linux/Mac
-pip install django djangorestframework django-cors-headers pillow openpyxl python-docx
+pip install django djangorestframework django-cors-headers pillow openpyxl python-docx python-dotenv
 
+cp .env.example .env       # completá las variables
 python manage.py migrate
 python seed_data.py
 python manage.py runserver
