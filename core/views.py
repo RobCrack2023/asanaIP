@@ -12,6 +12,12 @@ from .serializers import (
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
     AssetSerializer, OrganizationSerializer, PlanSerializer,
 )
+from .emails import (
+    notify_task_assigned,
+    notify_task_assigned_direct,
+    notify_assignment_accepted,
+    notify_assignment_rejected,
+)
 
 
 class IsSuperAdmin(BasePermission):
@@ -214,33 +220,45 @@ class TaskViewSet(viewsets.ModelViewSet):
         new_status = serializer.validated_data.get('status', instance.status)
 
         extra = {}
-        if new_assignee and new_assignee != instance.assignee:
+        assignee_changed = new_assignee and new_assignee != instance.assignee
+        is_direct = False
+        if assignee_changed:
             extra['assigned_by'] = user
             if user.is_staff:
                 extra['assignment_status'] = Task.AssignmentStatus.DIRECT
+                is_direct = True
             else:
                 extra['assignment_status'] = Task.AssignmentStatus.PENDING
 
         if new_status == Task.Status.COMPLETED and instance.status != Task.Status.COMPLETED:
             extra['completed_at'] = timezone.now()
-            serializer.save(**extra)
+            task = serializer.save(**extra)
             if instance.recurrence_type != Task.RecurrenceType.NONE:
                 instance.refresh_from_db()
                 instance.create_next_occurrence()
         elif new_status != Task.Status.COMPLETED and instance.status == Task.Status.COMPLETED:
             extra['completed_at'] = None
-            serializer.save(**extra)
+            task = serializer.save(**extra)
         else:
-            serializer.save(**extra)
+            task = serializer.save(**extra)
+
+        if assignee_changed:
+            task.refresh_from_db()
+            if is_direct:
+                notify_task_assigned_direct(task, user)
+            else:
+                notify_task_assigned(task, user)
 
     def perform_create(self, serializer):
         user = self.request.user
         assignee = serializer.validated_data.get('assignee')
         if assignee and assignee != user:
             if user.is_staff:
-                serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.DIRECT)
+                task = serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.DIRECT)
+                notify_task_assigned_direct(task, user)
             else:
-                serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.PENDING)
+                task = serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.PENDING)
+                notify_task_assigned(task, user)
         else:
             serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.DIRECT)
 
@@ -253,6 +271,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Esta tarea no está pendiente de aprobación'}, status=status.HTTP_400_BAD_REQUEST)
         task.assignment_status = Task.AssignmentStatus.ACCEPTED
         task.save()
+        notify_assignment_accepted(task)
         return Response(TaskSerializer(task).data)
 
     @action(detail=True, methods=['post'])
@@ -262,9 +281,12 @@ class TaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Solo el asignado puede rechazar'}, status=status.HTTP_403_FORBIDDEN)
         if task.assignment_status != Task.AssignmentStatus.PENDING:
             return Response({'error': 'Esta tarea no está pendiente de aprobación'}, status=status.HTTP_400_BAD_REQUEST)
+        # Guardamos el nombre antes de limpiar el assignee
+        task._rejected_by_name = request.user.get_full_name() or request.user.username
         task.assignment_status = Task.AssignmentStatus.REJECTED
         task.assignee = None
         task.save()
+        notify_assignment_rejected(task)
         return Response(TaskSerializer(task).data)
 
     @action(detail=False, methods=['get'])
