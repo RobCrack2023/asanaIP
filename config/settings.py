@@ -59,6 +59,16 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {
+            'init_command': (
+                'PRAGMA journal_mode=WAL;'      # lecturas y escrituras concurrentes
+                'PRAGMA synchronous=NORMAL;'    # seguro con WAL, más rápido que FULL
+                'PRAGMA foreign_keys=ON;'       # integridad referencial
+                'PRAGMA cache_size=-65536;'     # 64 MB de cache en memoria
+                'PRAGMA temp_store=MEMORY;'     # tablas temporales en RAM
+                'PRAGMA busy_timeout=5000;'     # espera 5 s antes de lanzar "database is locked"
+            ),
+        },
     }
 }
 
