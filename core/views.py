@@ -6,18 +6,14 @@ from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
 
 from rest_framework.permissions import BasePermission
-from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
+from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
-    AssetSerializer, OrganizationSerializer, PlanSerializer,
+    AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
 )
-from .emails import (
-    notify_task_assigned,
-    notify_task_assigned_direct,
-    notify_assignment_accepted,
-    notify_assignment_rejected,
-)
+from . import emails
+from . import notifications as notif
 
 
 class IsSuperAdmin(BasePermission):
@@ -245,9 +241,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         if assignee_changed:
             task.refresh_from_db()
             if is_direct:
-                notify_task_assigned_direct(task, user)
+                emails.notify_task_assigned_direct(task, user)
+                notif.notify_task_assigned_direct(task, user)
             else:
-                notify_task_assigned(task, user)
+                emails.notify_task_assigned(task, user)
+                notif.notify_task_assigned(task, user)
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -255,10 +253,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         if assignee and assignee != user:
             if user.is_staff:
                 task = serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.DIRECT)
-                notify_task_assigned_direct(task, user)
+                emails.notify_task_assigned_direct(task, user)
+                notif.notify_task_assigned_direct(task, user)
             else:
                 task = serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.PENDING)
-                notify_task_assigned(task, user)
+                emails.notify_task_assigned(task, user)
+                notif.notify_task_assigned(task, user)
         else:
             serializer.save(assigned_by=user, assignment_status=Task.AssignmentStatus.DIRECT)
 
@@ -271,7 +271,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Esta tarea no está pendiente de aprobación'}, status=status.HTTP_400_BAD_REQUEST)
         task.assignment_status = Task.AssignmentStatus.ACCEPTED
         task.save()
-        notify_assignment_accepted(task)
+        emails.notify_assignment_accepted(task)
+        notif.notify_assignment_accepted(task)
         return Response(TaskSerializer(task).data)
 
     @action(detail=True, methods=['post'])
@@ -286,7 +287,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         task.assignment_status = Task.AssignmentStatus.REJECTED
         task.assignee = None
         task.save()
-        notify_assignment_rejected(task)
+        emails.notify_assignment_rejected(task)
+        notif.notify_assignment_rejected(task)
         return Response(TaskSerializer(task).data)
 
     @action(detail=False, methods=['get'])
@@ -558,3 +560,37 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         org.is_active = not org.is_active
         org.save()
         return Response(OrganizationSerializer(org).data)
+
+
+class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = NotificationSerializer
+
+    def get_queryset(self):
+        qs = Notification.objects.filter(recipient=self.request.user).select_related('actor', 'task__section')
+        if self.request.query_params.get('unread') == 'true':
+            qs = qs.filter(is_read=False)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()[:50]
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+        return Response({'count': count})
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_queryset().filter(pk=pk).first()
+        if not notification:
+            return Response({'error': 'No encontrada'}, status=status.HTTP_404_NOT_FOUND)
+        notification.is_read = True
+        notification.save()
+        return Response(NotificationSerializer(notification).data)
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+        return Response({'ok': True})

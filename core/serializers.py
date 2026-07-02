@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
+from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -148,3 +148,14 @@ class AssetSerializer(serializers.ModelSerializer):
                   'file_size', 'mime_type', 'category', 'file_extension',
                   'uploaded_by', 'uploaded_by_name', 'created_at']
         read_only_fields = ['id', 'file_size', 'mime_type', 'uploaded_by', 'created_at']
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    actor_name = serializers.CharField(source='actor.get_full_name', read_only=True, default=None)
+    project_id = serializers.IntegerField(source='task.section.project_id', read_only=True, default=None)
+
+    class Meta:
+        model = Notification
+        fields = ['id', 'actor', 'actor_name', 'verb', 'task', 'project_id',
+                  'message', 'is_read', 'created_at']
+        read_only_fields = fields

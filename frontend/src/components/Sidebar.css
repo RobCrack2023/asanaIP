@@ -12,6 +12,12 @@
   padding: 16px 16px 8px;
 }
 
+.sidebar-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .sidebar-logo {
   display: flex;
   align-items: center;

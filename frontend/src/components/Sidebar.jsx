@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield } from 'lucide-react'
 import api from '../api'
 import Modal from './Modal'
+import NotificationBell from './NotificationBell'
 import './Sidebar.css'
 
 const COLORS = ['#4573D2', '#7C3AED', '#E8384F', '#FD9A00', '#5DA283', '#EA4E9D', '#EEC300', '#4ECBC4']
@@ -52,9 +53,12 @@ export default function Sidebar({ user, onLogout }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="sidebar-logo">
-          <div className="logo-icon">IP</div>
-          <span className="logo-text">AsanaIP</span>
+        <div className="sidebar-header-row">
+          <div className="sidebar-logo">
+            <div className="logo-icon">IP</div>
+            <span className="logo-text">AsanaIP</span>
+          </div>
+          <NotificationBell />
         </div>
       </div>
 

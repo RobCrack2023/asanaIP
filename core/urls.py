@@ -12,6 +12,7 @@ router.register(r'tasks', views.TaskViewSet)
 router.register(r'assets', views.AssetViewSet)
 router.register(r'organizations', views.OrganizationViewSet)
 router.register(r'plans', views.PlanViewSet)
+router.register(r'notifications', views.NotificationViewSet, basename='notification')
 
 urlpatterns = [
     path('auth/login/', views.login_view, name='login'),

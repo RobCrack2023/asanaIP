@@ -262,3 +262,25 @@ class Asset(models.Model):
         if ext in ('ppt', 'pptx'):
             return 'powerpoint'
         return 'other'
+
+
+class Notification(models.Model):
+    class Verb(models.TextChoices):
+        TASK_ASSIGNED = 'task_assigned', 'Asignación pendiente de aprobación'
+        TASK_ASSIGNED_DIRECT = 'task_assigned_direct', 'Tarea asignada'
+        ASSIGNMENT_ACCEPTED = 'assignment_accepted', 'Asignación aceptada'
+        ASSIGNMENT_REJECTED = 'assignment_rejected', 'Asignación rechazada'
+
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='+')
+    verb = models.CharField(max_length=30, choices=Verb.choices)
+    task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    message = models.CharField(max_length=255)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.message

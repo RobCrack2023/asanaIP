@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import {
   Plus, Check, ChevronDown, ChevronRight, Calendar, User, File,
   Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock,
@@ -27,6 +27,7 @@ const STATUS_CONFIG = {
 
 export default function ProjectView() {
   const { projectId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [project, setProject] = useState(null)
   const [users, setUsers] = useState([])
   const [collapsedSections, setCollapsedSections] = useState({})
@@ -39,6 +40,7 @@ export default function ProjectView() {
   const [dragActiveTask, setDragActiveTask] = useState(null)
   const [currentUser, setCurrentUser] = useState(null)
   const [showOnlyMine, setShowOnlyMine] = useState(false)
+  const [loadError, setLoadError] = useState(null)
   const newTaskRef = useRef(null)
   const newSectionRef = useRef(null)
 
@@ -47,7 +49,10 @@ export default function ProjectView() {
   )
 
   const loadProject = () => {
-    api.get(`/projects/${projectId}/`).then((res) => setProject(res.data))
+    setLoadError(null)
+    api.get(`/projects/${projectId}/`)
+      .then((res) => setProject(res.data))
+      .catch(() => setLoadError('No tenés acceso a este proyecto o no existe.'))
   }
 
   useEffect(() => {
@@ -60,6 +65,19 @@ export default function ProjectView() {
       }
     })
   }, [projectId])
+
+  useEffect(() => {
+    if (!project) return
+    const taskId = searchParams.get('task')
+    if (!taskId) return
+    const task = project.sections.flatMap((s) => s.tasks).find((t) => String(t.id) === taskId)
+    if (task) {
+      setSelectedTask(task)
+      const next = new URLSearchParams(searchParams)
+      next.delete('task')
+      setSearchParams(next, { replace: true })
+    }
+  }, [project])
 
   const filterTasks = (tasks) => {
     if (!showOnlyMine || !currentUser) return tasks
@@ -212,6 +230,7 @@ export default function ProjectView() {
     if (addingSection && newSectionRef.current) newSectionRef.current.focus()
   }, [addingSection])
 
+  if (loadError) return <div className="loading">{loadError}</div>
   if (!project) return <div className="loading">Cargando proyecto...</div>
 
   const allTaskIds = project.sections.flatMap((s) =>
