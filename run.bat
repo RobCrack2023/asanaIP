@@ -20,11 +20,12 @@ if not exist "venv\Scripts\activate.bat" (
     echo [!] No se encontro el entorno virtual. Creandolo...
     python -m venv venv
     call venv\Scripts\activate.bat
-    pip install django djangorestframework django-cors-headers pillow python-dotenv
+    echo [!] Instalando dependencias de requirements.txt...
+    pip install -r requirements.txt -q
     echo.
 ) else (
     call venv\Scripts\activate.bat
-    pip install python-dotenv -q
+    pip install -r requirements.txt -q
 )
 
 :: Verificar que existen las dependencias del frontend
