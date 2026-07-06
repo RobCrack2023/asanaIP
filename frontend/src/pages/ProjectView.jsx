@@ -10,6 +10,7 @@ import { CSS } from '@dnd-kit/utilities'
 import api from '../api'
 import KanbanView from './KanbanView'
 import AssetsPanel from './AssetsPanel'
+import CompleteTaskModal from '../components/CompleteTaskModal'
 import './ProjectView.css'
 
 const PRIORITY_CONFIG = {
@@ -41,6 +42,7 @@ export default function ProjectView() {
   const [currentUser, setCurrentUser] = useState(null)
   const [showOnlyMine, setShowOnlyMine] = useState(false)
   const [loadError, setLoadError] = useState(null)
+  const [completingTask, setCompletingTask] = useState(null)
   const newTaskRef = useRef(null)
   const newSectionRef = useRef(null)
 
@@ -133,15 +135,24 @@ export default function ProjectView() {
     }))
   }
 
-  const toggleTaskStatus = async (task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+  const toggleTaskStatus = (task) => {
+    if (task.status === 'completed') {
+      applyTaskStatus(task, 'pending')
+    } else {
+      setCompletingTask(task)
+    }
+  }
+
+  const applyTaskStatus = async (task, newStatus, note = '') => {
     updateProjectTasks((tasks) =>
       tasks.map((t) => t.id === task.id ? { ...t, status: newStatus } : t)
     )
     if (selectedTask?.id === task.id) {
       setSelectedTask((prev) => ({ ...prev, status: newStatus }))
     }
-    await api.patch(`/tasks/${task.id}/`, { status: newStatus })
+    const payload = { status: newStatus }
+    if (newStatus === 'completed') payload.completion_note = note
+    await api.patch(`/tasks/${task.id}/`, payload)
     if (task.recurrence_type && task.recurrence_type !== 'none' && newStatus === 'completed') {
       const res = await api.get(`/tasks/?section=${task.section}&parent=none`)
       setProject((prev) => ({
@@ -412,6 +423,17 @@ export default function ProjectView() {
           />
         </div>
       )}
+
+      {completingTask && (
+        <CompleteTaskModal
+          taskTitle={completingTask.title}
+          onClose={() => setCompletingTask(null)}
+          onConfirm={async (note) => {
+            await applyTaskStatus(completingTask, 'completed', note)
+            setCompletingTask(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -506,6 +528,7 @@ function TaskDetail({ task, users, onClose, onUpdate, onDelete }) {
   const [subtasks, setSubtasks] = useState([])
   const [newSubtask, setNewSubtask] = useState('')
   const [addingSubtask, setAddingSubtask] = useState(false)
+  const [confirmingComplete, setConfirmingComplete] = useState(false)
   const subtaskRef = useRef(null)
 
   useEffect(() => {
@@ -548,7 +571,13 @@ function TaskDetail({ task, users, onClose, onUpdate, onDelete }) {
       <div className="task-detail-header">
         <button
           className={`task-checkbox ${task.status === 'completed' ? 'checked' : ''}`}
-          onClick={() => onUpdate({ status: task.status === 'completed' ? 'pending' : 'completed' })}
+          onClick={() => {
+            if (task.status === 'completed') {
+              onUpdate({ status: 'pending' })
+            } else {
+              setConfirmingComplete(true)
+            }
+          }}
         >
           {task.status === 'completed' && <Check size={12} />}
         </button>
@@ -557,6 +586,12 @@ function TaskDetail({ task, users, onClose, onUpdate, onDelete }) {
         <button className="icon-btn" onClick={onDelete}><Trash2 size={16} /></button>
         <button className="icon-btn" onClick={onClose}><X size={16} /></button>
       </div>
+
+      {task.status === 'completed' && task.completion_note && (
+        <div className="task-completion-note">
+          <strong>Observación de cierre:</strong> {task.completion_note}
+        </div>
+      )}
 
       <input
         className="task-detail-title"
@@ -706,6 +741,17 @@ function TaskDetail({ task, users, onClose, onUpdate, onDelete }) {
           </button>
         )}
       </div>
+
+      {confirmingComplete && (
+        <CompleteTaskModal
+          taskTitle={task.title}
+          onClose={() => setConfirmingComplete(false)}
+          onConfirm={async (note) => {
+            await onUpdate({ status: 'completed', completion_note: note })
+            setConfirmingComplete(false)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FolderOpen, LayoutGrid, CheckCircle2, Clock, AlertCircle, Check, Flag, Calendar, Bell, CheckCheck, XCircle, Send } from 'lucide-react'
 import api from '../api'
+import CompleteTaskModal from '../components/CompleteTaskModal'
 import './HomePage.css'
 
 const PRIORITY_COLORS = { urgent: '#e8384f', high: '#fd9a00', medium: '#4573d2', low: '#9ca0a5' }
@@ -18,6 +19,7 @@ export default function HomePage() {
   const [assignedByMe, setAssignedByMe] = useState([])
   const [pendingApprovals, setPendingApprovals] = useState([])
   const [taskFilter, setTaskFilter] = useState('pending')
+  const [completingTask, setCompletingTask] = useState(null)
   const navigate = useNavigate()
 
   const loadTasks = () => {
@@ -49,10 +51,19 @@ export default function HomePage() {
   const inProgressCount = myTasks.filter((t) => t.status === 'in_progress').length
   const completedCount = myTasks.filter((t) => t.status === 'completed').length
 
-  const toggleTask = async (task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+  const toggleTask = (task) => {
+    if (task.status === 'completed') {
+      applyTaskStatus(task, 'pending')
+    } else {
+      setCompletingTask(task)
+    }
+  }
+
+  const applyTaskStatus = async (task, newStatus, note = '') => {
     setMyTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, status: newStatus } : t))
-    await api.patch(`/tasks/${task.id}/`, { status: newStatus })
+    const payload = { status: newStatus }
+    if (newStatus === 'completed') payload.completion_note = note
+    await api.patch(`/tasks/${task.id}/`, payload)
   }
 
   const acceptTask = async (taskId) => {
@@ -230,6 +241,17 @@ export default function HomePage() {
           ))}
         </div>
       </div>
+
+      {completingTask && (
+        <CompleteTaskModal
+          taskTitle={completingTask.title}
+          onClose={() => setCompletingTask(null)}
+          onConfirm={async (note) => {
+            await applyTaskStatus(completingTask, 'completed', note)
+            setCompletingTask(null)
+          }}
+        />
+      )}
     </div>
   )
 }

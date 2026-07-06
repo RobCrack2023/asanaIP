@@ -116,6 +116,13 @@
   margin-top: 20px;
 }
 
+.confirm-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
 .btn {
   padding: 8px 16px;
   border-radius: 6px;

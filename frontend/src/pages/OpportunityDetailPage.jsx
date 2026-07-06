@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
+import CompleteTaskModal from '../components/CompleteTaskModal'
 import '../pages/ProjectView.css'
 import './OpportunityDetailPage.css'
 
@@ -60,10 +61,19 @@ export default function OpportunityDetailPage() {
     setTasks((prev) => [...prev, res.data])
   }
 
-  const toggleTask = async (task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+  const toggleTask = (task) => {
+    if (task.status === 'completed') {
+      applyTaskStatus(task, 'pending')
+    } else {
+      setModal({ type: 'complete', task })
+    }
+  }
+
+  const applyTaskStatus = async (task, newStatus, note = '') => {
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: newStatus } : t)))
-    await api.patch(`/tasks/${task.id}/`, { status: newStatus })
+    const payload = { status: newStatus }
+    if (newStatus === 'completed') payload.completion_note = note
+    await api.patch(`/tasks/${task.id}/`, payload)
   }
 
   const deleteTask = async (taskId) => {
@@ -265,6 +275,16 @@ export default function OpportunityDetailPage() {
         </div>
       </div>
 
+      {modal?.type === 'complete' && (
+        <CompleteTaskModal
+          taskTitle={modal.task.title}
+          onClose={() => setModal(null)}
+          onConfirm={async (note) => {
+            await applyTaskStatus(modal.task, 'completed', note)
+            setModal(null)
+          }}
+        />
+      )}
       {modal?.type === 'won' && (
         <MarkWonModal teams={teams} onClose={() => setModal(null)} onConfirm={markWon} />
       )}

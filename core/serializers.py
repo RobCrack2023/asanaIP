@@ -92,7 +92,7 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = ['id', 'title', 'description', 'section', 'opportunity', 'assignee', 'assignee_name',
                   'assigned_by', 'assigned_by_name', 'assignment_status',
-                  'parent', 'priority', 'status', 'start_date', 'due_date', 'completed_at',
+                  'parent', 'priority', 'status', 'completion_note', 'start_date', 'due_date', 'completed_at',
                   'order', 'subtasks_count',
                   'visibility',
                   'recurrence_type', 'recurrence_day', 'recurrence_end_date',
