@@ -6,11 +6,15 @@ from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
 
 from rest_framework.permissions import BasePermission
-from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification
+from .models import (
+    User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
+    Client, Opportunity, Quote,
+)
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
+    ClientSerializer, OpportunitySerializer, QuoteSerializer,
 )
 from . import emails
 from . import notifications as notif
@@ -19,6 +23,11 @@ from . import notifications as notif
 class IsSuperAdmin(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.is_super_admin
+
+
+class IsStaffOrSales(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and (request.user.is_staff or request.user.is_sales)
 
 
 @api_view(['POST'])
@@ -170,7 +179,7 @@ class SectionViewSet(viewsets.ModelViewSet):
 
 
 class TaskViewSet(viewsets.ModelViewSet):
-    queryset = Task.objects.select_related('assignee', 'assigned_by', 'section__project').all()
+    queryset = Task.objects.select_related('assignee', 'assigned_by', 'section__project', 'opportunity').all()
     serializer_class = TaskSerializer
 
     def get_queryset(self):
@@ -187,6 +196,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         section_id = self.request.query_params.get('section')
         project_id = self.request.query_params.get('project')
+        opportunity_id = self.request.query_params.get('opportunity')
         assignee_id = self.request.query_params.get('assignee')
         status_filter = self.request.query_params.get('status')
         parent = self.request.query_params.get('parent')
@@ -195,6 +205,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             qs = qs.filter(section_id=section_id)
         if project_id:
             qs = qs.filter(section__project_id=project_id)
+        if opportunity_id:
+            qs = qs.filter(opportunity_id=opportunity_id)
         if assignee_id:
             qs = qs.filter(assignee_id=assignee_id)
         assigned_by_id = self.request.query_params.get('assigned_by')
@@ -594,3 +606,67 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def mark_all_read(self, request):
         Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
         return Response({'ok': True})
+
+
+class ClientViewSet(viewsets.ModelViewSet):
+    queryset = Client.objects.all()
+    serializer_class = ClientSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        return super().get_queryset().filter(organization=self.request.user.organization)
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
+
+
+class OpportunityViewSet(viewsets.ModelViewSet):
+    queryset = Opportunity.objects.select_related('client', 'owner', 'project').all()
+    serializer_class = OpportunitySerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(organization=self.request.user.organization)
+        client_id = self.request.query_params.get('client')
+        stage = self.request.query_params.get('stage')
+        if client_id:
+            qs = qs.filter(client_id=client_id)
+        if stage:
+            qs = qs.filter(stage=stage)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization, owner=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def mark_won(self, request, pk=None):
+        opportunity = self.get_object()
+        team_id = request.data.get('team_id')
+        if not team_id:
+            return Response({'error': 'team_id es requerido'}, status=status.HTTP_400_BAD_REQUEST)
+        team = Team.objects.filter(pk=team_id, area__organization=request.user.organization).first()
+        if not team:
+            return Response({'error': 'Equipo no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        project = opportunity.mark_won(team=team, user=request.user)
+        emails.notify_opportunity_won(opportunity, project, request.user)
+        notif.notify_opportunity_won(opportunity, project, request.user)
+        return Response(OpportunitySerializer(opportunity).data)
+
+    @action(detail=True, methods=['post'])
+    def mark_lost(self, request, pk=None):
+        opportunity = self.get_object()
+        opportunity.mark_lost(reason=request.data.get('reason', ''))
+        return Response(OpportunitySerializer(opportunity).data)
+
+
+class QuoteViewSet(viewsets.ModelViewSet):
+    queryset = Quote.objects.all()
+    serializer_class = QuoteSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(opportunity__organization=self.request.user.organization)
+        opportunity_id = self.request.query_params.get('opportunity')
+        if opportunity_id:
+            qs = qs.filter(opportunity_id=opportunity_id)
+        return qs

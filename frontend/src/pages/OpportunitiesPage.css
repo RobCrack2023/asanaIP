@@ -1,0 +1,151 @@
+.opps-page {
+  padding: 32px 40px;
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.opps-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.opps-header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.opps-header p {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.opps-header .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.opps-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.opps-tab {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--tag-bg);
+  transition: all 0.15s;
+}
+
+.opps-tab:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.opps-tab.active {
+  background: var(--accent);
+  color: white;
+}
+
+.opps-table {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.opps-table-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: #faf9f8;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.opps-table-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f3f2f1;
+  transition: background 0.1s;
+  cursor: pointer;
+}
+
+.opps-table-row:last-child {
+  border-bottom: none;
+}
+
+.opps-table-row:hover {
+  background: var(--content-bg-hover);
+}
+
+.ot-col-name { flex: 1.4; min-width: 160px; font-size: 13px; font-weight: 500; }
+.ot-col-client { flex: 1; min-width: 120px; font-size: 13px; color: var(--text-secondary); }
+.ot-col-stage { width: 150px; min-width: 130px; }
+.ot-col-amount { width: 120px; min-width: 100px; font-size: 13px; }
+.ot-col-close { width: 130px; min-width: 110px; font-size: 12px; color: var(--text-muted); }
+.ot-col-actions { width: 50px; min-width: 50px; display: flex; justify-content: flex-end; }
+
+.opp-stage-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.ot-action-btn {
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.ot-action-btn:hover {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.ot-action-btn.danger:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.opps-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Form styles (shared pattern with other pages) */
+.form-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.form-row .modal-field {
+  flex: 1;
+}
+
+.form-error {
+  background: #fef2f2;
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}

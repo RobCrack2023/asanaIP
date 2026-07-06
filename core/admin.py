@@ -1,6 +1,9 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan
+from .models import (
+    User, Area, Team, Project, Section, Task, Asset, Organization, Plan,
+    Client, Opportunity, Quote,
+)
 
 
 @admin.register(Plan)
@@ -58,3 +61,23 @@ class TaskAdmin(admin.ModelAdmin):
 class AssetAdmin(admin.ModelAdmin):
     list_display = ['name', 'asset_type', 'project', 'uploaded_by', 'created_at']
     list_filter = ['asset_type', 'project']
+
+
+@admin.register(Client)
+class ClientAdmin(admin.ModelAdmin):
+    list_display = ['name', 'contact_name', 'email', 'organization', 'created_at']
+    list_filter = ['organization']
+    search_fields = ['name', 'contact_name', 'email']
+
+
+@admin.register(Opportunity)
+class OpportunityAdmin(admin.ModelAdmin):
+    list_display = ['name', 'client', 'stage', 'estimated_amount', 'owner', 'created_at']
+    list_filter = ['stage', 'organization']
+    search_fields = ['name']
+
+
+@admin.register(Quote)
+class QuoteAdmin(admin.ModelAdmin):
+    list_display = ['opportunity', 'status', 'total_amount', 'created_at']
+    list_filter = ['status']

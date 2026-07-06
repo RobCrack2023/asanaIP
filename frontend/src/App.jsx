@@ -8,6 +8,9 @@ import HomePage from './pages/HomePage'
 import UsersPage from './pages/UsersPage'
 import AreaView from './pages/AreaView'
 import SuperAdminPage from './pages/SuperAdminPage'
+import ClientsPage from './pages/ClientsPage'
+import OpportunitiesPage from './pages/OpportunitiesPage'
+import OpportunityDetailPage from './pages/OpportunityDetailPage'
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -37,6 +40,9 @@ export default function App() {
         <Route path="/area/:areaId" element={<AreaView />} />
         <Route path="/project/:projectId" element={<ProjectView />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/clients" element={<ClientsPage />} />
+        <Route path="/opportunities" element={<OpportunitiesPage />} />
+        <Route path="/opportunities/:opportunityId" element={<OpportunityDetailPage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Layout>

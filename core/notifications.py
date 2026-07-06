@@ -1,10 +1,6 @@
 from .models import Notification
 
 
-def _project_name(task):
-    return task.section.project.name if task.section and task.section.project else 'un proyecto'
-
-
 def notify_task_assigned(task, assigned_by):
     """Asignado: le delegaron una tarea (requiere su aprobación)."""
     if not task.assignee:
@@ -59,3 +55,19 @@ def notify_assignment_rejected(task):
         task=task,
         message=f'{assignee_name} rechazó "{task.title}"',
     )
+
+
+def notify_opportunity_won(opportunity, project, user):
+    """Asignados de tareas de la oportunidad + dueño: se ganó el negocio y se creó el proyecto."""
+    recipients = {t.assignee for t in opportunity.tasks.all() if t.assignee}
+    if opportunity.owner:
+        recipients.add(opportunity.owner)
+
+    for recipient in recipients:
+        Notification.objects.create(
+            recipient=recipient,
+            actor=user,
+            verb=Notification.Verb.OPPORTUNITY_WON,
+            task=None,
+            message=f'La oportunidad "{opportunity.name}" fue ganada — se creó el proyecto "{project.name}"',
+        )

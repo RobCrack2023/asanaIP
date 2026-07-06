@@ -166,6 +166,11 @@
   color: #7c3aed;
 }
 
+.ut-status-badge.sales {
+  background: #fdf1e0;
+  color: #b0740d;
+}
+
 .ut-action-btn {
   padding: 5px;
   border-radius: 5px;

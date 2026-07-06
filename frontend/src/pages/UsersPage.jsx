@@ -93,6 +93,7 @@ export default function UsersPage() {
                 : <span className="ut-status-badge inactive">Inactivo</span>
               }
               {user.is_staff && <span className="ut-status-badge admin">Admin</span>}
+              {user.is_sales && <span className="ut-status-badge sales">Ventas</span>}
             </div>
             <div className="ut-col-actions">
               <button className="ut-action-btn" title="Editar" onClick={() => setModal({ type: 'edit', user })}>
@@ -130,6 +131,7 @@ function UserFormModal({ user, teams, onClose, onSaved }) {
     job_title: user?.job_title || '',
     is_active: user?.is_active ?? true,
     is_staff: user?.is_staff ?? false,
+    is_sales: user?.is_sales ?? false,
     password: '',
   })
   const [selectedTeams, setSelectedTeams] = useState(user?.teams?.map((t) => t.id) || [])
@@ -247,6 +249,12 @@ function UserFormModal({ user, teams, onClose, onSaved }) {
             <label className="checkbox-label">
               <input type="checkbox" checked={form.is_staff} onChange={(e) => handleChange('is_staff', e.target.checked)} />
               Administrador
+            </label>
+          </div>
+          <div className="modal-field">
+            <label className="checkbox-label">
+              <input type="checkbox" checked={form.is_sales} onChange={(e) => handleChange('is_sales', e.target.checked)} />
+              Ventas (acceso a CRM)
             </label>
           </div>
         </div>

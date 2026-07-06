@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification
+from .models import (
+    User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
+    Client, Opportunity, Quote,
+)
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -29,7 +32,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name',
                   'full_name', 'avatar', 'job_title', 'is_active', 'is_staff',
-                  'is_super_admin', 'organization', 'password', 'teams']
+                  'is_super_admin', 'is_sales', 'organization', 'password', 'teams']
         read_only_fields = ['id']
 
     def get_full_name(self, obj):
@@ -87,7 +90,7 @@ class TaskSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Task
-        fields = ['id', 'title', 'description', 'section', 'assignee', 'assignee_name',
+        fields = ['id', 'title', 'description', 'section', 'opportunity', 'assignee', 'assignee_name',
                   'assigned_by', 'assigned_by_name', 'assignment_status',
                   'parent', 'priority', 'status', 'start_date', 'due_date', 'completed_at',
                   'order', 'subtasks_count',
@@ -95,6 +98,14 @@ class TaskSerializer(serializers.ModelSerializer):
                   'recurrence_type', 'recurrence_day', 'recurrence_end_date',
                   'created_at', 'updated_at']
         read_only_fields = ['id', 'completed_at', 'created_at', 'updated_at']
+        extra_kwargs = {'section': {'required': False, 'allow_null': True}}
+
+    def validate(self, data):
+        section = data.get('section', getattr(self.instance, 'section', None))
+        opportunity = data.get('opportunity', getattr(self.instance, 'opportunity', None))
+        if not section and not opportunity:
+            raise serializers.ValidationError('La tarea debe pertenecer a una sección o a una oportunidad.')
+        return data
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -159,3 +170,36 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = ['id', 'actor', 'actor_name', 'verb', 'task', 'project_id',
                   'message', 'is_read', 'created_at']
         read_only_fields = fields
+
+
+class ClientSerializer(serializers.ModelSerializer):
+    opportunities_count = serializers.IntegerField(source='opportunities.count', read_only=True)
+
+    class Meta:
+        model = Client
+        fields = ['id', 'name', 'contact_name', 'email', 'phone', 'notes',
+                  'opportunities_count', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class QuoteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Quote
+        fields = ['id', 'opportunity', 'status', 'line_items', 'total_amount', 'notes',
+                  'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class OpportunitySerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source='client.name', read_only=True)
+    owner_name = serializers.CharField(source='owner.get_full_name', read_only=True, default=None)
+    stage_display = serializers.CharField(source='get_stage_display', read_only=True)
+    tasks_count = serializers.IntegerField(source='tasks.count', read_only=True)
+    quotes = QuoteSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Opportunity
+        fields = ['id', 'client', 'client_name', 'name', 'description', 'stage', 'stage_display',
+                  'estimated_amount', 'owner', 'owner_name', 'expected_close_date',
+                  'lost_reason', 'project', 'tasks_count', 'quotes', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'project', 'created_at', 'updated_at']

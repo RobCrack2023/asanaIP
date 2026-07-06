@@ -21,13 +21,21 @@ def _send(subject, body, to_email):
         pass
 
 
+def _task_origin_name(task):
+    if task.section and task.section.project:
+        return task.section.project.name
+    if task.opportunity:
+        return f'la oportunidad "{task.opportunity.name}"'
+    return 'un proyecto'
+
+
 def notify_task_assigned(task, assigned_by):
     """Notifica al asignado cuando le delegan una tarea (requiere aprobación)."""
     assignee = task.assignee
     if not assignee or not assignee.email:
         return
 
-    project_name = task.section.project.name if task.section and task.section.project else 'un proyecto'
+    project_name = _task_origin_name(task)
     assignee_name = assignee.get_full_name() or assignee.username
     assigner_name = assigned_by.get_full_name() or assigned_by.username
 
@@ -55,7 +63,7 @@ def notify_task_assigned_direct(task, assigned_by):
     if not assignee or not assignee.email:
         return
 
-    project_name = task.section.project.name if task.section and task.section.project else 'un proyecto'
+    project_name = _task_origin_name(task)
     assignee_name = assignee.get_full_name() or assignee.username
     assigner_name = assigned_by.get_full_name() or assigned_by.username
 
@@ -118,3 +126,22 @@ def notify_assignment_rejected(task):
     )
 
     _send(f"[AsanaIP] Tarea rechazada: {task.title}", body, assigned_by.email)
+
+
+def notify_opportunity_won(opportunity, project, user):
+    """Notifica a los asignados de tareas de la oportunidad y a su dueño que se ganó el negocio."""
+    recipients = {t.assignee for t in opportunity.tasks.all() if t.assignee and t.assignee.email}
+    if opportunity.owner and opportunity.owner.email:
+        recipients.add(opportunity.owner)
+
+    for recipient in recipients:
+        recipient_name = recipient.get_full_name() or recipient.username
+        body = (
+            f"Hola {recipient_name},\n\n"
+            f"La oportunidad \"{opportunity.name}\" ({opportunity.client.name}) fue marcada como GANADA.\n\n"
+            f"Se creó el proyecto \"{project.name}\" y las tareas asociadas se movieron ahí.\n\n"
+            f"Ingresá a AsanaIP para verlo:\n"
+            f"  {_app_url()}\n\n"
+            f"— AsanaIP"
+        )
+        _send(f"[AsanaIP] Oportunidad ganada: {opportunity.name}", body, recipient.email)

@@ -41,6 +41,7 @@ class User(AbstractUser):
     job_title = models.CharField(max_length=100, blank=True)
     organization = models.ForeignKey(Organization, on_delete=models.SET_NULL, null=True, blank=True, related_name='members')
     is_super_admin = models.BooleanField(default=False)
+    is_sales = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['first_name', 'last_name']
@@ -135,7 +136,8 @@ class Task(models.Model):
 
     title = models.CharField(max_length=500)
     description = models.TextField(blank=True)
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='tasks')
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='tasks', null=True, blank=True)
+    opportunity = models.ForeignKey('Opportunity', on_delete=models.SET_NULL, null=True, blank=True, related_name='tasks')
     assignee = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
     assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='tasks_assigned_by')
     assignment_status = models.CharField(max_length=20, choices=AssignmentStatus.choices, default=AssignmentStatus.DIRECT)
@@ -270,6 +272,7 @@ class Notification(models.Model):
         TASK_ASSIGNED_DIRECT = 'task_assigned_direct', 'Tarea asignada'
         ASSIGNMENT_ACCEPTED = 'assignment_accepted', 'Asignación aceptada'
         ASSIGNMENT_REJECTED = 'assignment_rejected', 'Asignación rechazada'
+        OPPORTUNITY_WON = 'opportunity_won', 'Oportunidad ganada — proyecto creado'
 
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     actor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='+')
@@ -284,3 +287,94 @@ class Notification(models.Model):
 
     def __str__(self):
         return self.message
+
+
+class Client(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='clients')
+    name = models.CharField(max_length=200)
+    contact_name = models.CharField(max_length=200, blank=True)
+    email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class Opportunity(models.Model):
+    class Stage(models.TextChoices):
+        PROSPECTO = 'prospecto', 'Prospecto'
+        COTIZACION_ENVIADA = 'cotizacion_enviada', 'Cotización enviada'
+        NEGOCIACION = 'negociacion', 'Negociación'
+        GANADA = 'ganada', 'Ganada'
+        PERDIDA = 'perdida', 'Perdida'
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='opportunities')
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='opportunities')
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.PROSPECTO)
+    estimated_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_opportunities')
+    expected_close_date = models.DateField(null=True, blank=True)
+    lost_reason = models.CharField(max_length=255, blank=True)
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True, related_name='opportunities')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.client.name})'
+
+    def mark_won(self, team, user=None):
+        from django.db import transaction
+
+        if self.stage == self.Stage.GANADA:
+            return self.project
+
+        with transaction.atomic():
+            project = Project.objects.create(
+                name=self.name,
+                description=f'Proyecto generado desde la oportunidad "{self.name}" ({self.client.name}).',
+                team=team,
+                owner=user or self.owner,
+            )
+            section = Section.objects.create(name='General', project=project, order=0)
+            self.tasks.update(section=section)
+            self.project = project
+            self.stage = self.Stage.GANADA
+            self.save(update_fields=['project', 'stage', 'updated_at'])
+        return project
+
+    def mark_lost(self, reason=''):
+        self.stage = self.Stage.PERDIDA
+        self.lost_reason = reason
+        self.save(update_fields=['stage', 'lost_reason', 'updated_at'])
+
+
+class Quote(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Borrador'
+        SENT = 'sent', 'Enviada'
+        APPROVED = 'approved', 'Aprobada'
+        REJECTED = 'rejected', 'Rechazada'
+
+    opportunity = models.ForeignKey(Opportunity, on_delete=models.CASCADE, related_name='quotes')
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    line_items = models.JSONField(default=list, blank=True)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Cotización #{self.id} — {self.opportunity.name}'
