@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Check, Trash2, Trophy, XCircle, FileText, Plus, ExternalLink,
+  ArrowLeft, Check, Trash2, Trophy, XCircle, FileText, Plus, ExternalLink, ChevronRight,
 } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
+import MonthSelect from '../components/MonthSelect'
 import CompleteTaskModal from '../components/CompleteTaskModal'
 import '../pages/ProjectView.css'
 import './OpportunityDetailPage.css'
@@ -22,6 +23,10 @@ const QUOTE_STATUS_LABELS = {
   rejected: 'Rechazada',
 }
 
+const formatMoney = (amount) =>
+  new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
+    .format(Number(amount) || 0)
+
 export default function OpportunityDetailPage() {
   const { opportunityId } = useParams()
   const navigate = useNavigate()
@@ -29,6 +34,7 @@ export default function OpportunityDetailPage() {
   const [tasks, setTasks] = useState([])
   const [users, setUsers] = useState([])
   const [teams, setTeams] = useState([])
+  const [products, setProducts] = useState([])
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [modal, setModal] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -46,6 +52,7 @@ export default function OpportunityDetailPage() {
     load()
     api.get('/users/').then((res) => setUsers(res.data))
     api.get('/teams/').then((res) => setTeams(res.data))
+    api.get('/products/?active=1').then((res) => setProducts(res.data))
   }, [opportunityId])
 
   const updateOpportunity = async (data) => {
@@ -89,6 +96,12 @@ export default function OpportunityDetailPage() {
   const addQuote = async (data) => {
     const res = await api.post('/quotes/', { ...data, opportunity: Number(opportunityId) })
     setOpportunity((prev) => ({ ...prev, quotes: [res.data, ...prev.quotes] }))
+  }
+
+  const deleteQuote = async (quote) => {
+    if (!confirm(`¿Eliminar esta cotización de ${formatMoney(quote.total_amount)}?`)) return
+    await api.delete(`/quotes/${quote.id}/`)
+    setOpportunity((prev) => ({ ...prev, quotes: prev.quotes.filter((q) => q.id !== quote.id) }))
   }
 
   const markWon = async (teamId) => {
@@ -160,12 +173,11 @@ export default function OpportunityDetailPage() {
           />
         </div>
         <div className="opp-field">
-          <label>Fecha de cierre esperada</label>
-          <input
-            type="date"
+          <label>Mes de cierre esperado</label>
+          <MonthSelect
             disabled={!isOpen}
-            defaultValue={opportunity.expected_close_date || ''}
-            onBlur={(e) => updateOpportunity({ expected_close_date: e.target.value || null })}
+            value={opportunity.expected_close_date}
+            onChange={(date) => updateOpportunity({ expected_close_date: date })}
           />
         </div>
         <div className="opp-field">
@@ -215,16 +227,7 @@ export default function OpportunityDetailPage() {
         ) : (
           <div className="opp-quotes-list">
             {opportunity.quotes.map((q) => (
-              <div key={q.id} className="opp-quote-row">
-                <span className={`quote-status-badge ${q.status}`}>{QUOTE_STATUS_LABELS[q.status]}</span>
-                <span className="opp-quote-amount">
-                  {new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(q.total_amount)}
-                </span>
-                <span className="opp-quote-date">
-                  {new Date(q.created_at).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </span>
-                {q.notes && <span className="opp-quote-notes">{q.notes}</span>}
-              </div>
+              <QuoteCard key={q.id} quote={q} onDelete={() => deleteQuote(q)} />
             ))}
           </div>
         )}
@@ -292,7 +295,7 @@ export default function OpportunityDetailPage() {
         <MarkLostModal onClose={() => setModal(null)} onConfirm={markLost} />
       )}
       {modal?.type === 'quote' && (
-        <QuoteFormModal onClose={() => setModal(null)} onSaved={addQuote} />
+        <QuoteFormModal products={products} onClose={() => setModal(null)} onSaved={addQuote} />
       )}
     </div>
   )
@@ -360,38 +363,221 @@ function MarkLostModal({ onClose, onConfirm }) {
   )
 }
 
-function QuoteFormModal({ onClose, onSaved }) {
+function QuoteCard({ quote, onDelete }) {
+  const items = quote.line_items || []
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="opp-quote-card">
+      <div
+        className={`opp-quote-row ${items.length ? 'expandable' : ''}`}
+        onClick={() => items.length && setExpanded((v) => !v)}
+      >
+        {items.length > 0 && (
+          <ChevronRight size={14} className={`opp-quote-chevron ${expanded ? 'open' : ''}`} />
+        )}
+        <span className={`quote-status-badge ${quote.status}`}>{QUOTE_STATUS_LABELS[quote.status]}</span>
+        <span className="opp-quote-amount">{formatMoney(quote.total_amount)}</span>
+        {items.length > 0 && (
+          <span className="opp-quote-count">{items.length} {items.length === 1 ? 'ítem' : 'ítems'}</span>
+        )}
+        <span className="opp-quote-date">
+          {new Date(quote.created_at).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}
+        </span>
+        {quote.notes && <span className="opp-quote-notes">{quote.notes}</span>}
+        <button
+          className="opp-quote-delete"
+          title="Eliminar cotización"
+          onClick={(e) => { e.stopPropagation(); onDelete() }}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="opp-quote-detail">
+          <div className="quote-items-head">
+            <span>Descripción</span>
+            <span>Cant.</span>
+            <span>Precio unitario</span>
+            <span>Subtotal</span>
+          </div>
+          {items.map((item, index) => (
+            <div key={index} className="quote-detail-row">
+              <span>{item.description}</span>
+              <span>{item.quantity}</span>
+              <span>{formatMoney(item.unit_price)}</span>
+              <span>{formatMoney(item.subtotal ?? item.quantity * item.unit_price)}</span>
+            </div>
+          ))}
+          <div className="quote-detail-total">
+            <span>Total</span>
+            <strong>{formatMoney(quote.total_amount)}</strong>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const emptyItem = () => ({ description: '', quantity: '1', unit_price: '' })
+
+const itemSubtotal = (item) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
+
+function QuoteFormModal({ products = [], onClose, onSaved }) {
   const [status, setStatus] = useState('draft')
-  const [totalAmount, setTotalAmount] = useState('')
+  const [items, setItems] = useState([emptyItem()])
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const total = items.reduce((sum, item) => sum + itemSubtotal(item), 0)
+
+  const updateItem = (index, field, value) =>
+    setItems((prev) => prev.map((item, i) => (i === index ? { ...item, [field]: value } : item)))
+
+  const addItem = () => setItems((prev) => [...prev, emptyItem()])
+
+  // Picking from the catalog copies the price in — the quote keeps its own
+  // snapshot, so later catalog changes never rewrite an existing quote.
+  const addFromCatalog = (productId) => {
+    const product = products.find((p) => String(p.id) === productId)
+    if (!product) return
+    const row = {
+      description: product.unit && product.unit !== 'unidad'
+        ? `${product.name} (${product.unit})`
+        : product.name,
+      quantity: '1',
+      unit_price: String(product.unit_price ?? ''),
+    }
+    setItems((prev) => {
+      const last = prev[prev.length - 1]
+      const lastIsBlank = last && !last.description.trim() && !last.unit_price
+      return lastIsBlank ? [...prev.slice(0, -1), row] : [...prev, row]
+    })
+  }
+
+  const removeItem = (index) => setItems((prev) => prev.filter((_, i) => i !== index))
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    const filled = items.filter((item) => item.description.trim())
+    if (!filled.length) {
+      setError('Agrega al menos un producto con descripción')
+      return
+    }
+    if (filled.some((item) => !(Number(item.quantity) > 0))) {
+      setError('La cantidad de cada producto debe ser mayor que cero')
+      return
+    }
     setSaving(true)
-    await onSaved({ status, total_amount: totalAmount || 0, notes })
-    onClose()
+    setError('')
+    try {
+      await onSaved({
+        status,
+        notes,
+        line_items: filled.map((item) => ({
+          description: item.description.trim(),
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unit_price) || 0,
+        })),
+      })
+      onClose()
+    } catch (err) {
+      setError(err.response?.data?.line_items?.[0] || 'Error al crear la cotización')
+      setSaving(false)
+    }
   }
 
   return (
-    <Modal title="Nueva cotización" onClose={onClose}>
+    <Modal title="Nueva cotización" onClose={onClose} className="modal-wide">
       <form onSubmit={handleSubmit}>
-        <div className="form-row">
-          <div className="modal-field">
-            <label>Estado</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              {Object.entries(QUOTE_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
+        {error && <div className="form-error">{error}</div>}
+
+        <div className="modal-field">
+          <label>Productos / servicios</label>
+          <div className="quote-items">
+            <div className="quote-items-head">
+              <span>Descripción</span>
+              <span>Cant.</span>
+              <span>Precio unitario</span>
+              <span>Subtotal</span>
+              <span></span>
+            </div>
+            {items.map((item, index) => (
+              <div key={index} className="quote-item-row">
+                <input
+                  value={item.description}
+                  onChange={(e) => updateItem(index, 'description', e.target.value)}
+                  placeholder="Ej: Bomba centrífuga 5 HP"
+                  autoFocus={index === 0}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={item.quantity}
+                  onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={item.unit_price}
+                  onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                  placeholder="0"
+                />
+                <span className="quote-item-subtotal">{formatMoney(itemSubtotal(item))}</span>
+                <button
+                  type="button"
+                  className="quote-item-remove"
+                  title="Quitar"
+                  disabled={items.length === 1}
+                  onClick={() => removeItem(index)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
           </div>
-          <div className="modal-field">
-            <label>Monto total</label>
-            <input type="number" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="0" autoFocus />
+          <div className="quote-items-actions">
+            <button type="button" className="field-link" onClick={addItem}>
+              <Plus size={12} /> Agregar línea
+            </button>
+            {products.length > 0 && (
+              <select
+                className="quote-catalog-picker"
+                value=""
+                onChange={(e) => { addFromCatalog(e.target.value); e.target.value = '' }}
+              >
+                <option value="">Agregar del catálogo...</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.sku ? `${p.sku} — ` : ''}{p.name} ({formatMoney(p.unit_price)})
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
+
+        <div className="quote-total-row">
+          <span>Total</span>
+          <strong>{formatMoney(total)}</strong>
+        </div>
+
+        <div className="modal-field">
+          <label>Estado</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            {Object.entries(QUOTE_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </div>
+
         <div className="modal-field">
           <label>Notas</label>
-          <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Detalle de la cotización..." />
+          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Condiciones, plazos de entrega..." />
         </div>
+
         <div className="modal-actions">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
           <button type="submit" className="btn btn-primary" disabled={saving}>

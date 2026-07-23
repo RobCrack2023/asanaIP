@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { TrendingUp, Trash2 } from 'lucide-react'
+import { TrendingUp, Trash2, Plus } from 'lucide-react'
 import api from '../api'
+import { formatMonth } from '../dates'
 import Modal from '../components/Modal'
+import MonthSelect from '../components/MonthSelect'
+import ClientFormModal from '../components/ClientFormModal'
 import './OpportunitiesPage.css'
 
 const STAGE_CONFIG = {
@@ -90,11 +93,7 @@ export default function OpportunitiesPage() {
                 </span>
               </span>
               <span className="ot-col-amount">{formatMoney(opp.estimated_amount)}</span>
-              <span className="ot-col-close">
-                {opp.expected_close_date
-                  ? new Date(opp.expected_close_date + 'T00:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })
-                  : '—'}
-              </span>
+              <span className="ot-col-close">{formatMonth(opp.expected_close_date)}</span>
               <div className="ot-col-actions">
                 <button className="ot-action-btn danger" title="Eliminar" onClick={(e) => { e.stopPropagation(); deleteOpportunity(opp.id) }}>
                   <Trash2 size={14} />
@@ -113,6 +112,9 @@ export default function OpportunitiesPage() {
         <OpportunityFormModal
           clients={clients}
           defaultClientId={clientFilter}
+          onClientCreated={(client) =>
+            setClients((prev) => [...prev, client].sort((a, b) => a.name.localeCompare(b.name)))
+          }
           onClose={() => setModal(null)}
           onSaved={(opp) => { load(); navigate(`/opportunities/${opp.id}`) }}
         />
@@ -121,16 +123,17 @@ export default function OpportunitiesPage() {
   )
 }
 
-function OpportunityFormModal({ clients, defaultClientId, onClose, onSaved }) {
+function OpportunityFormModal({ clients, defaultClientId, onClientCreated, onClose, onSaved }) {
   const [form, setForm] = useState({
     client: defaultClientId || '',
     name: '',
     description: '',
     estimated_amount: '',
-    expected_close_date: '',
+    expected_close_date: null,
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [creatingClient, setCreatingClient] = useState(false)
 
   const handleChange = (field, value) => setForm((prev) => ({ ...prev, [field]: value }))
 
@@ -147,7 +150,7 @@ function OpportunityFormModal({ clients, defaultClientId, onClose, onSaved }) {
         ...form,
         client: Number(form.client),
         estimated_amount: form.estimated_amount || null,
-        expected_close_date: form.expected_close_date || null,
+        expected_close_date: form.expected_close_date,
       }
       const res = await api.post('/opportunities/', payload)
       onSaved(res.data)
@@ -158,46 +161,70 @@ function OpportunityFormModal({ clients, defaultClientId, onClose, onSaved }) {
   }
 
   return (
-    <Modal title="Nueva oportunidad" onClose={onClose}>
-      <form onSubmit={handleSubmit}>
-        {error && <div className="form-error">{error}</div>}
+    <>
+      <Modal title="Nueva oportunidad" onClose={onClose}>
+        <form onSubmit={handleSubmit}>
+          {error && <div className="form-error">{error}</div>}
 
-        <div className="modal-field">
-          <label>Cliente *</label>
-          <select value={form.client} onChange={(e) => handleChange('client', e.target.value)} required autoFocus>
-            <option value="">Seleccionar cliente...</option>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-
-        <div className="modal-field">
-          <label>Nombre de la oportunidad *</label>
-          <input value={form.name} onChange={(e) => handleChange('name', e.target.value)} placeholder="Ej: Implementación ERP - Cliente XYZ" required />
-        </div>
-
-        <div className="form-row">
           <div className="modal-field">
-            <label>Monto estimado</label>
-            <input type="number" value={form.estimated_amount} onChange={(e) => handleChange('estimated_amount', e.target.value)} placeholder="0" />
+            <div className="modal-field-label-row">
+              <label>Cliente *</label>
+              <button type="button" className="field-link" onClick={() => setCreatingClient(true)}>
+                <Plus size={12} />
+                Nuevo cliente
+              </button>
+            </div>
+            <select value={form.client} onChange={(e) => handleChange('client', e.target.value)} required autoFocus>
+              <option value="">
+                {clients.length ? 'Seleccionar cliente...' : 'Aún no hay clientes — crea uno'}
+              </option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
           </div>
+
           <div className="modal-field">
-            <label>Fecha de cierre esperada</label>
-            <input type="date" value={form.expected_close_date} onChange={(e) => handleChange('expected_close_date', e.target.value)} />
+            <label>Nombre de la oportunidad *</label>
+            <input value={form.name} onChange={(e) => handleChange('name', e.target.value)} placeholder="Ej: Implementación ERP - Cliente XYZ" required />
           </div>
-        </div>
 
-        <div className="modal-field">
-          <label>Descripción</label>
-          <textarea rows={3} value={form.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Detalles del negocio..." />
-        </div>
+          <div className="form-row">
+            <div className="modal-field">
+              <label>Monto estimado</label>
+              <input type="number" value={form.estimated_amount} onChange={(e) => handleChange('estimated_amount', e.target.value)} placeholder="0" />
+            </div>
+            <div className="modal-field">
+              <label>Mes de cierre esperado</label>
+              <MonthSelect
+                value={form.expected_close_date}
+                onChange={(date) => handleChange('expected_close_date', date)}
+              />
+            </div>
+          </div>
 
-        <div className="modal-actions">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'Creando...' : 'Crear oportunidad'}
-          </button>
-        </div>
-      </form>
-    </Modal>
+          <div className="modal-field">
+            <label>Descripción</label>
+            <textarea rows={3} value={form.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Detalles del negocio..." />
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? 'Creando...' : 'Crear oportunidad'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {creatingClient && (
+        <ClientFormModal
+          stacked
+          onClose={() => setCreatingClient(false)}
+          onSaved={(client) => {
+            onClientCreated(client)
+            handleChange('client', String(client.id))
+          }}
+        />
+      )}
+    </>
   )
 }

@@ -259,6 +259,215 @@
 .quote-status-badge.approved { background: #e6f4ea; color: var(--success); }
 .quote-status-badge.rejected { background: #fef2f2; color: var(--danger); }
 
+/* Quote line items — breakdown on the card */
+.opp-quote-card {
+  border-bottom: 1px solid #f3f2f1;
+}
+
+.opp-quote-card:last-child {
+  border-bottom: none;
+}
+
+.opp-quote-card .opp-quote-row {
+  border-bottom: none;
+}
+
+.opp-quote-row.expandable {
+  cursor: pointer;
+}
+
+.opp-quote-row.expandable:hover {
+  background: var(--content-bg-hover);
+}
+
+.opp-quote-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.opp-quote-chevron.open {
+  transform: rotate(90deg);
+}
+
+.opp-quote-delete {
+  margin-left: auto;
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.opp-quote-delete:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.opp-quote-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.opp-quote-detail {
+  padding: 4px 14px 12px 34px;
+  background: #faf9f8;
+}
+
+.quote-items-head {
+  display: grid;
+  grid-template-columns: 1fr 70px 120px 110px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 8px 0 6px;
+}
+
+.quote-detail-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 120px 110px;
+  gap: 8px;
+  font-size: 13px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.quote-detail-row span:nth-child(n + 2) {
+  text-align: right;
+}
+
+.quote-detail-total {
+  display: flex;
+  justify-content: space-between;
+  border-top: 2px solid var(--border-color);
+  margin-top: 4px;
+  padding-top: 8px;
+  font-size: 13px;
+}
+
+/* Quote line items — editor inside the modal */
+.modal-overlay.modal-wide .modal {
+  width: 620px;
+}
+
+.quote-items-head + .quote-item-row {
+  border-top: none;
+}
+
+.quote-item-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 120px 110px 28px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.quote-item-row input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+
+.quote-item-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(69, 115, 210, 0.12);
+}
+
+.quote-item-row input[type='number'] {
+  text-align: right;
+}
+
+.quote-item-subtotal {
+  font-size: 13px;
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+.quote-item-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+}
+
+.quote-item-remove:hover:not(:disabled) {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.quote-item-remove:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.quote-items-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.quote-catalog-picker {
+  max-width: 300px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  outline: none;
+  background: white;
+}
+
+.quote-catalog-picker:focus {
+  border-color: var(--accent);
+}
+
+.quote-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  margin-bottom: 16px;
+  border-top: 2px solid var(--border-color);
+  font-size: 14px;
+}
+
+.field-link {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 4px;
+  border-radius: 4px;
+  margin-top: 6px;
+}
+
+.field-link:hover {
+  background: rgba(69, 115, 210, 0.1);
+}
+
+.form-error {
+  background: #fef2f2;
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
 .opp-tasks-list {
   border: 1px solid var(--border-color);
   border-radius: 8px;

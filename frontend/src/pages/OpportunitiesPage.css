@@ -149,3 +149,29 @@
   font-size: 13px;
   margin-bottom: 14px;
 }
+
+.modal-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.modal-field-label-row label {
+  margin-bottom: 0;
+}
+
+.field-link {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.field-link:hover {
+  background: rgba(69, 115, 210, 0.1);
+}

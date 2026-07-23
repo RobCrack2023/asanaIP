@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield, Building2, TrendingUp, Trash2 } from 'lucide-react'
+import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield, Building2, TrendingUp, Package, Trash2 } from 'lucide-react'
 import api from '../api'
 import Modal from './Modal'
 import NotificationBell from './NotificationBell'
@@ -111,6 +111,13 @@ export default function Sidebar({ user, onLogout }) {
           <button className={`nav-item ${location.pathname === '/clients' ? 'active' : ''}`} onClick={() => navigate('/clients')}>
             <Building2 size={16} />
             <span>Clientes</span>
+          </button>
+        )}
+
+        {(user.is_staff || user.is_sales) && (
+          <button className={`nav-item ${location.pathname === '/products' ? 'active' : ''}`} onClick={() => navigate('/products')}>
+            <Package size={16} />
+            <span>Productos</span>
           </button>
         )}
 
