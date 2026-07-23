@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework import permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
@@ -28,6 +29,22 @@ class IsSuperAdmin(BasePermission):
 class IsStaffOrSales(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and (request.user.is_staff or request.user.is_sales)
+
+
+class ReadOnlyUnlessStaff(BasePermission):
+    """Everyone signed in can read; only staff may create, edit or delete.
+
+    Matches what the sidebar exposes — without it the default IsAuthenticated
+    would let any team member delete their own area, cascading into every
+    project, task and file under it.
+    """
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.user.is_staff or request.user.is_super_admin
 
 
 @api_view(['POST'])
@@ -60,6 +77,7 @@ def me_view(request):
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [ReadOnlyUnlessStaff]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -68,10 +86,17 @@ class UserViewSet(viewsets.ModelViewSet):
             qs = qs.filter(organization=user.organization)
         return qs
 
+    def perform_create(self, serializer):
+        # Without this the new user is saved with organization=NULL and then
+        # vanishes from the list, which is scoped to the caller's organization.
+        organization = serializer.validated_data.get('organization') or self.request.user.organization
+        serializer.save(organization=organization)
+
 
 class AreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all()
     serializer_class = AreaSerializer
+    permission_classes = [ReadOnlyUnlessStaff]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -98,6 +123,7 @@ class AreaViewSet(viewsets.ModelViewSet):
 class TeamViewSet(viewsets.ModelViewSet):
     queryset = Team.objects.all()
     serializer_class = TeamSerializer
+    permission_classes = [ReadOnlyUnlessStaff]
 
     def get_queryset(self):
         qs = super().get_queryset()
