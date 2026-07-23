@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield, Building2, TrendingUp } from 'lucide-react'
+import { Home, ChevronDown, ChevronRight, Plus, Users, LogOut, UserCog, Shield, Building2, TrendingUp, Trash2 } from 'lucide-react'
 import api from '../api'
 import Modal from './Modal'
 import NotificationBell from './NotificationBell'
@@ -49,6 +49,38 @@ export default function Sidebar({ user, onLogout }) {
   const currentProjectId = location.pathname.match(/\/project\/(\d+)/)?.[1]
 
   const handleLogout = () => api.post('/auth/logout/').then(() => onLogout())
+
+  // Areas cascade into teams, teams into projects, projects into tasks and
+  // files — so spell out what goes with it before asking.
+  const confirmCascade = (label, name, doomedProjects) => {
+    const extra = doomedProjects.length
+      ? ` Se borrarán también ${doomedProjects.length} proyecto${doomedProjects.length === 1 ? '' : 's'}, con sus tareas y archivos.`
+      : ''
+    return confirm(`¿Eliminar ${label} "${name}"?${extra} Esta acción no se puede deshacer.`)
+  }
+
+  const leaveIfViewing = (doomedProjects, areaId) => {
+    const onDeletedArea = areaId && location.pathname === `/area/${areaId}`
+    const onDeletedProject = doomedProjects.some((p) => String(p.id) === currentProjectId)
+    if (onDeletedArea || onDeletedProject) navigate('/')
+  }
+
+  const deleteArea = async (area) => {
+    const areaTeams = getTeamsByArea(area.id)
+    const doomed = areaTeams.flatMap((t) => getProjectsByTeam(t.id))
+    if (!confirmCascade('el área', area.name, doomed)) return
+    await api.delete(`/areas/${area.id}/`)
+    leaveIfViewing(doomed, area.id)
+    reload()
+  }
+
+  const deleteTeam = async (team) => {
+    const doomed = getProjectsByTeam(team.id)
+    if (!confirmCascade('el equipo', team.name, doomed)) return
+    await api.delete(`/teams/${team.id}/`)
+    leaveIfViewing(doomed)
+    reload()
+  }
 
   return (
     <aside className="sidebar">
@@ -107,9 +139,14 @@ export default function Sidebar({ user, onLogout }) {
               <div className="area-dot" style={{ background: area.color }} />
               <span className="nav-area-link" onClick={() => navigate(`/area/${area.id}`)}>{area.name}</span>
               {user.is_staff && (
-                <button className="nav-inline-add" onClick={() => setModal({ type: 'team', areaId: area.id })} title="Nuevo equipo">
-                  <Plus size={12} />
-                </button>
+                <>
+                  <button className="nav-inline-add" onClick={() => setModal({ type: 'team', areaId: area.id })} title="Nuevo equipo">
+                    <Plus size={12} />
+                  </button>
+                  <button className="nav-inline-delete" onClick={() => deleteArea(area)} title="Eliminar área">
+                    <Trash2 size={12} />
+                  </button>
+                </>
               )}
             </div>
 
@@ -121,9 +158,14 @@ export default function Sidebar({ user, onLogout }) {
                   <span>{team.name}</span>
                   <span className="nav-badge">{team.members_count}</span>
                   {user.is_staff && (
-                    <button className="nav-inline-add" onClick={(e) => { e.stopPropagation(); setModal({ type: 'project', teamId: team.id }) }} title="Nuevo proyecto">
-                      <Plus size={12} />
-                    </button>
+                    <>
+                      <button className="nav-inline-add" onClick={(e) => { e.stopPropagation(); setModal({ type: 'project', teamId: team.id }) }} title="Nuevo proyecto">
+                        <Plus size={12} />
+                      </button>
+                      <button className="nav-inline-delete" onClick={(e) => { e.stopPropagation(); deleteTeam(team) }} title="Eliminar equipo">
+                        <Trash2 size={12} />
+                      </button>
+                    </>
                   )}
                 </div>
 
