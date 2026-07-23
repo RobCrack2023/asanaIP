@@ -1,5 +1,7 @@
 .sa-layout {
   height: 100vh;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: #f5f4f3;
