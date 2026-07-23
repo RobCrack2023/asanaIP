@@ -306,6 +306,33 @@ class Client(models.Model):
         return self.name
 
 
+class Product(models.Model):
+    """Catalog of products and services quoted to clients."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='products')
+    name = models.CharField(max_length=200)
+    sku = models.CharField(max_length=50, blank=True)
+    description = models.TextField(blank=True)
+    unit = models.CharField(max_length=20, blank=True, default='unidad')
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'sku'],
+                condition=~models.Q(sku=''),
+                name='unique_sku_per_organization',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Opportunity(models.Model):
     class Stage(models.TextChoices):
         PROSPECTO = 'prospecto', 'Prospecto'

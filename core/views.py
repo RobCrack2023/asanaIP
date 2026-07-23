@@ -9,13 +9,13 @@ from django.contrib.auth import authenticate, login, logout
 from rest_framework.permissions import BasePermission
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, Quote,
+    Client, Opportunity, Quote, Product,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
-    ClientSerializer, OpportunitySerializer, QuoteSerializer,
+    ClientSerializer, OpportunitySerializer, QuoteSerializer, ProductSerializer,
 )
 from . import emails
 from . import notifications as notif
@@ -683,6 +683,21 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         opportunity = self.get_object()
         opportunity.mark_lost(reason=request.data.get('reason', ''))
         return Response(OpportunitySerializer(opportunity).data)
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(organization=self.request.user.organization)
+        if self.request.query_params.get('active') == '1':
+            qs = qs.filter(is_active=True)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
 
 
 class QuoteViewSet(viewsets.ModelViewSet):

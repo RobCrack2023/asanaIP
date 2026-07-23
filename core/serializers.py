@@ -1,7 +1,9 @@
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import serializers
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, Quote,
+    Client, Opportunity, Quote, Product,
 )
 
 
@@ -182,12 +184,83 @@ class ClientSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class ProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'sku', 'description', 'unit', 'unit_price', 'is_active',
+                  'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_unit_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('El precio no puede ser negativo.')
+        return value
+
+    def validate_sku(self, value):
+        sku = (value or '').strip()
+        if not sku:
+            return ''
+        organization = self.context['request'].user.organization
+        clashes = Product.objects.filter(organization=organization, sku__iexact=sku)
+        if self.instance:
+            clashes = clashes.exclude(pk=self.instance.pk)
+        if clashes.exists():
+            raise serializers.ValidationError('Ya existe un producto con este código.')
+        return sku
+
+
 class QuoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quote
         fields = ['id', 'opportunity', 'status', 'line_items', 'total_amount', 'notes',
                   'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_line_items(self, value):
+        """Normalize each item to {description, quantity, unit_price, subtotal}."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError('Debe ser una lista de ítems.')
+
+        normalized = []
+        for index, raw in enumerate(value, start=1):
+            if not isinstance(raw, dict):
+                raise serializers.ValidationError(f'El ítem {index} no es válido.')
+
+            description = str(raw.get('description', '')).strip()
+            if not description:
+                raise serializers.ValidationError(f'El ítem {index} necesita una descripción.')
+
+            try:
+                quantity = Decimal(str(raw.get('quantity', '0')))
+                unit_price = Decimal(str(raw.get('unit_price', '0')))
+            except (InvalidOperation, TypeError):
+                raise serializers.ValidationError(
+                    f'La cantidad y el precio unitario del ítem {index} deben ser numéricos.'
+                )
+
+            if quantity <= 0:
+                raise serializers.ValidationError(f'La cantidad del ítem {index} debe ser mayor que cero.')
+            if unit_price < 0:
+                raise serializers.ValidationError(f'El precio unitario del ítem {index} no puede ser negativo.')
+
+            normalized.append({
+                'description': description[:200],
+                'quantity': float(quantity),
+                'unit_price': float(unit_price),
+                'subtotal': float(quantity * unit_price),
+            })
+        return normalized
+
+    def validate(self, attrs):
+        # With a breakdown the total is derived, never whatever the client sent.
+        # Quotes without items keep the manually entered total.
+        items = attrs.get('line_items')
+        if items:
+            attrs['total_amount'] = sum(
+                (Decimal(str(item['quantity'])) * Decimal(str(item['unit_price'])) for item in items),
+                Decimal('0'),
+            )
+        return attrs
 
 
 class OpportunitySerializer(serializers.ModelSerializer):
