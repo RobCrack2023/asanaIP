@@ -7,6 +7,27 @@ from .models import (
 )
 
 
+class OrgScopedRelatedField(serializers.PrimaryKeyRelatedField):
+    """Relation restricted to rows of the requesting user's organization.
+
+    The default PrimaryKeyRelatedField accepts any pk in the table, so without
+    this a user could point a quote or an opportunity at another company's
+    records — and read the related name back out of the response.
+    """
+
+    def __init__(self, org_lookup='organization', **kwargs):
+        self.org_lookup = org_lookup
+        super().__init__(**kwargs)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        request = self.context.get('request')
+        organization = getattr(getattr(request, 'user', None), 'organization', None)
+        if organization is None:
+            return queryset.none()
+        return queryset.filter(**{self.org_lookup: organization})
+
+
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan
@@ -210,6 +231,8 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class QuoteSerializer(serializers.ModelSerializer):
+    opportunity = OrgScopedRelatedField(queryset=Opportunity.objects.all())
+
     class Meta:
         model = Quote
         fields = ['id', 'opportunity', 'status', 'line_items', 'total_amount', 'notes',
@@ -264,6 +287,8 @@ class QuoteSerializer(serializers.ModelSerializer):
 
 
 class OpportunitySerializer(serializers.ModelSerializer):
+    client = OrgScopedRelatedField(queryset=Client.objects.all())
+    owner = OrgScopedRelatedField(queryset=User.objects.all(), required=False, allow_null=True)
     client_name = serializers.CharField(source='client.name', read_only=True)
     owner_name = serializers.CharField(source='owner.get_full_name', read_only=True, default=None)
     stage_display = serializers.CharField(source='get_stage_display', read_only=True)

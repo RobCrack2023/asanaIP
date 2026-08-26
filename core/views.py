@@ -676,13 +676,13 @@ class OpportunityViewSet(viewsets.ModelViewSet):
         project = opportunity.mark_won(team=team, user=request.user)
         emails.notify_opportunity_won(opportunity, project, request.user)
         notif.notify_opportunity_won(opportunity, project, request.user)
-        return Response(OpportunitySerializer(opportunity).data)
+        return Response(self.get_serializer(opportunity).data)
 
     @action(detail=True, methods=['post'])
     def mark_lost(self, request, pk=None):
         opportunity = self.get_object()
         opportunity.mark_lost(reason=request.data.get('reason', ''))
-        return Response(OpportunitySerializer(opportunity).data)
+        return Response(self.get_serializer(opportunity).data)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
