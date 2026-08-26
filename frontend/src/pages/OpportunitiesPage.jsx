@@ -1,25 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { TrendingUp, Trash2, Plus } from 'lucide-react'
+import { TrendingUp, Trash2, Plus, LayoutGrid, List } from 'lucide-react'
 import api from '../api'
 import { formatMonth } from '../dates'
+import { STAGE_CONFIG, STAGES, formatMoney } from '../stages'
 import Modal from '../components/Modal'
 import MonthSelect from '../components/MonthSelect'
 import ClientFormModal from '../components/ClientFormModal'
+import { MarkWonModal, MarkLostModal } from '../components/OutcomeModals'
+import PipelineBoard from './PipelineBoard'
 import './OpportunitiesPage.css'
-
-const STAGE_CONFIG = {
-  prospecto: { label: 'Prospecto', color: '#9ca0a5' },
-  cotizacion_enviada: { label: 'Cotización enviada', color: '#4573d2' },
-  negociacion: { label: 'Negociación', color: '#fd9a00' },
-  ganada: { label: 'Ganada', color: '#5da283' },
-  perdida: { label: 'Perdida', color: '#e8384f' },
-}
 
 export default function OpportunitiesPage() {
   const [opportunities, setOpportunities] = useState([])
   const [clients, setClients] = useState([])
+  const [teams, setTeams] = useState([])
   const [stageFilter, setStageFilter] = useState('all')
+  const [view, setView] = useState('board')
   const [modal, setModal] = useState(null)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -30,11 +27,16 @@ export default function OpportunitiesPage() {
     api.get('/clients/').then((res) => setClients(res.data))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api.get('/teams/').then((res) => setTeams(res.data))
+  }, [])
 
-  const filtered = opportunities
-    .filter((o) => (clientFilter ? String(o.client) === clientFilter : true))
-    .filter((o) => (stageFilter === 'all' ? true : o.stage === stageFilter))
+  const byClient = opportunities.filter((o) => (clientFilter ? String(o.client) === clientFilter : true))
+  // The stage tabs belong to the list; the board already separates by stage.
+  const filtered = view === 'board'
+    ? byClient
+    : byClient.filter((o) => (stageFilter === 'all' ? true : o.stage === stageFilter))
 
   const deleteOpportunity = async (id) => {
     if (!confirm('¿Eliminar esta oportunidad? Se perderá el historial de tareas y cotizaciones asociadas.')) return
@@ -42,9 +44,26 @@ export default function OpportunitiesPage() {
     load()
   }
 
-  const formatMoney = (amount) => {
-    if (amount == null) return '—'
-    return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(amount)
+  // Optimistic so the card lands where it was dropped; the reload afterwards
+  // brings back whatever the server actually recorded.
+  const moveToStage = async (opportunity, stage) => {
+    setOpportunities((prev) => prev.map((o) => (o.id === opportunity.id ? { ...o, stage } : o)))
+    try {
+      await api.patch(`/opportunities/${opportunity.id}/`, { stage })
+    } finally {
+      load()
+    }
+  }
+
+  const markWon = async (opportunity, teamId) => {
+    await api.post(`/opportunities/${opportunity.id}/mark_won/`, { team_id: teamId })
+    setModal(null)
+    load()
+  }
+
+  const markLost = async (opportunity, reason) => {
+    await api.post(`/opportunities/${opportunity.id}/mark_lost/`, { reason })
+    load()
   }
 
   return (
@@ -54,19 +73,50 @@ export default function OpportunitiesPage() {
           <h1>Oportunidades</h1>
           <p>{filtered.length} oportunidades{clientFilter && ' de este cliente'}</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setModal({ type: 'create' })}>
-          <TrendingUp size={15} />
-          Nueva oportunidad
-        </button>
+        <div className="opps-header-actions">
+          <div className="opps-view-toggle">
+            <button
+              className={`opps-view-btn ${view === 'board' ? 'active' : ''}`}
+              onClick={() => setView('board')}
+            >
+              <LayoutGrid size={14} /> Tablero
+            </button>
+            <button
+              className={`opps-view-btn ${view === 'list' ? 'active' : ''}`}
+              onClick={() => setView('list')}
+            >
+              <List size={14} /> Lista
+            </button>
+          </div>
+          <button className="btn btn-primary" onClick={() => setModal({ type: 'create' })}>
+            <TrendingUp size={15} />
+            Nueva oportunidad
+          </button>
+        </div>
       </div>
 
+      {view === 'board' ? (
+        <PipelineBoard
+          opportunities={filtered}
+          onMove={moveToStage}
+          onRequestOutcome={(opportunity, stage) =>
+            setModal({ type: stage === 'ganada' ? 'won' : 'lost', opportunity })
+          }
+          onOpen={(opportunity) => navigate(`/opportunities/${opportunity.id}`)}
+        />
+      ) : (
+      <>
       <div className="opps-tabs">
         <button className={`opps-tab ${stageFilter === 'all' ? 'active' : ''}`} onClick={() => setStageFilter('all')}>
           Todas
         </button>
-        {Object.entries(STAGE_CONFIG).map(([key, conf]) => (
-          <button key={key} className={`opps-tab ${stageFilter === key ? 'active' : ''}`} onClick={() => setStageFilter(key)}>
-            {conf.label}
+        {STAGES.map((stage) => (
+          <button
+            key={stage.value}
+            className={`opps-tab ${stageFilter === stage.value ? 'active' : ''}`}
+            onClick={() => setStageFilter(stage.value)}
+          >
+            {stage.label}
           </button>
         ))}
       </div>
@@ -107,6 +157,24 @@ export default function OpportunitiesPage() {
           <div className="opps-empty">No hay oportunidades en esta vista</div>
         )}
       </div>
+      </>
+      )}
+
+      {modal?.type === 'won' && (
+        <MarkWonModal
+          teams={teams}
+          opportunityName={modal.opportunity.name}
+          onClose={() => setModal(null)}
+          onConfirm={(teamId) => markWon(modal.opportunity, teamId)}
+        />
+      )}
+      {modal?.type === 'lost' && (
+        <MarkLostModal
+          opportunityName={modal.opportunity.name}
+          onClose={() => setModal(null)}
+          onConfirm={(reason) => markLost(modal.opportunity, reason)}
+        />
+      )}
 
       {modal?.type === 'create' && (
         <OpportunityFormModal

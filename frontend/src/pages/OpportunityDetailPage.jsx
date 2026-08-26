@@ -9,14 +9,10 @@ import Modal from '../components/Modal'
 import MonthSelect from '../components/MonthSelect'
 import CompleteTaskModal from '../components/CompleteTaskModal'
 import { formatDateTime } from '../dates'
+import { OPEN_STAGES, formatMoney } from '../stages'
+import { MarkWonModal, MarkLostModal } from '../components/OutcomeModals'
 import '../pages/ProjectView.css'
 import './OpportunityDetailPage.css'
-
-const STAGE_OPTIONS = [
-  { value: 'prospecto', label: 'Prospecto' },
-  { value: 'cotizacion_enviada', label: 'Cotización enviada' },
-  { value: 'negociacion', label: 'Negociación' },
-]
 
 const QUOTE_STATUS_LABELS = {
   draft: 'Borrador',
@@ -42,10 +38,6 @@ const ACTIVITY_ICONS = {
   won: Trophy,
   lost: XCircle,
 }
-
-const formatMoney = (amount) =>
-  new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
-    .format(Number(amount) || 0)
 
 export default function OpportunityDetailPage() {
   const { opportunityId } = useParams()
@@ -199,7 +191,7 @@ export default function OpportunityDetailPage() {
           <label>Etapa</label>
           {isOpen ? (
             <select value={opportunity.stage} onChange={(e) => updateOpportunity({ stage: e.target.value })}>
-              {STAGE_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              {OPEN_STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           ) : (
             <span>{opportunity.stage_display}</span>
@@ -437,68 +429,6 @@ function ActivityTimeline({ activities, onDelete }) {
         )
       })}
     </div>
-  )
-}
-
-function MarkWonModal({ teams, onClose, onConfirm }) {
-  const [teamId, setTeamId] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!teamId) return
-    setSaving(true)
-    await onConfirm(teamId)
-  }
-
-  return (
-    <Modal title="Marcar oportunidad como Ganada" onClose={onClose}>
-      <form onSubmit={handleSubmit}>
-        <p className="opp-modal-hint">Se creará un Proyecto nuevo y las tareas de esta oportunidad se moverán ahí. ¿A qué equipo pertenece?</p>
-        <div className="modal-field">
-          <label>Equipo *</label>
-          <select value={teamId} onChange={(e) => setTeamId(e.target.value)} required autoFocus>
-            <option value="">Seleccionar equipo...</option>
-            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="btn btn-primary" disabled={!teamId || saving}>
-            {saving ? 'Creando proyecto...' : 'Confirmar y crear proyecto'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  )
-}
-
-function MarkLostModal({ onClose, onConfirm }) {
-  const [reason, setReason] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setSaving(true)
-    await onConfirm(reason)
-    onClose()
-  }
-
-  return (
-    <Modal title="Marcar oportunidad como Perdida" onClose={onClose}>
-      <form onSubmit={handleSubmit}>
-        <div className="modal-field">
-          <label>Motivo</label>
-          <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="¿Por qué se perdió el negocio?" autoFocus />
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'Guardando...' : 'Confirmar'}
-          </button>
-        </div>
-      </form>
-    </Modal>
   )
 }
 
