@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation
 from rest_framework import serializers
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, Quote, Product,
+    Client, Opportunity, OpportunityActivity, Quote, Product,
 )
 
 
@@ -284,6 +284,51 @@ class QuoteSerializer(serializers.ModelSerializer):
                 Decimal('0'),
             )
         return attrs
+
+
+class OpportunityActivitySerializer(serializers.ModelSerializer):
+    opportunity = OrgScopedRelatedField(queryset=Opportunity.objects.all())
+    kind_display = serializers.CharField(source='get_kind_display', read_only=True)
+    author_name = serializers.CharField(source='author.get_full_name', read_only=True, default=None)
+    from_stage_display = serializers.SerializerMethodField()
+    to_stage_display = serializers.SerializerMethodField()
+    is_system = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = OpportunityActivity
+        fields = ['id', 'opportunity', 'kind', 'kind_display', 'body',
+                  'from_stage', 'from_stage_display', 'to_stage', 'to_stage_display',
+                  'occurred_at', 'author', 'author_name', 'is_system', 'created_at']
+        # Stage moves and authorship are recorded by the server, never posted.
+        read_only_fields = ['id', 'from_stage', 'to_stage', 'author', 'created_at']
+
+    def _stage_label(self, value):
+        if not value:
+            return None
+        try:
+            return Opportunity.Stage(value).label
+        except ValueError:
+            return value
+
+    def get_from_stage_display(self, obj):
+        return self._stage_label(obj.from_stage)
+
+    def get_to_stage_display(self, obj):
+        return self._stage_label(obj.to_stage)
+
+    def validate_kind(self, value):
+        if value not in OpportunityActivity.MANUAL_KINDS:
+            raise serializers.ValidationError(
+                'Solo se pueden registrar notas, llamadas, reuniones o correos; '
+                'los cambios de etapa los registra el sistema.'
+            )
+        return value
+
+    def validate_body(self, value):
+        body = (value or '').strip()
+        if not body:
+            raise serializers.ValidationError('Escribe el detalle de la actividad.')
+        return body
 
 
 class OpportunitySerializer(serializers.ModelSerializer):

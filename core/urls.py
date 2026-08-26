@@ -15,6 +15,7 @@ router.register(r'plans', views.PlanViewSet)
 router.register(r'notifications', views.NotificationViewSet, basename='notification')
 router.register(r'clients', views.ClientViewSet)
 router.register(r'opportunities', views.OpportunityViewSet)
+router.register(r'opportunity-activities', views.OpportunityActivityViewSet)
 router.register(r'quotes', views.QuoteViewSet)
 router.register(r'products', views.ProductViewSet)
 

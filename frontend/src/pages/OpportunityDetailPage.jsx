@@ -2,11 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Check, Trash2, Trophy, XCircle, FileText, Plus, ExternalLink, ChevronRight,
+  Activity, MessageSquare, Phone, Users, Mail, ArrowRight,
 } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
 import MonthSelect from '../components/MonthSelect'
 import CompleteTaskModal from '../components/CompleteTaskModal'
+import { formatDateTime } from '../dates'
 import '../pages/ProjectView.css'
 import './OpportunityDetailPage.css'
 
@@ -23,6 +25,24 @@ const QUOTE_STATUS_LABELS = {
   rejected: 'Rechazada',
 }
 
+// Kinds the user can log by hand; stage moves are written by the server.
+const ACTIVITY_KINDS = [
+  { value: 'note', label: 'Nota', icon: MessageSquare, placeholder: 'Anota lo que pasó...' },
+  { value: 'call', label: 'Llamada', icon: Phone, placeholder: '¿Con quién hablaste y qué acordaron?' },
+  { value: 'meeting', label: 'Reunión', icon: Users, placeholder: '¿Qué se definió en la reunión?' },
+  { value: 'email', label: 'Correo', icon: Mail, placeholder: 'Resume el correo enviado o recibido.' },
+]
+
+const ACTIVITY_ICONS = {
+  note: MessageSquare,
+  call: Phone,
+  meeting: Users,
+  email: Mail,
+  stage_change: ArrowRight,
+  won: Trophy,
+  lost: XCircle,
+}
+
 const formatMoney = (amount) =>
   new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
     .format(Number(amount) || 0)
@@ -35,10 +55,15 @@ export default function OpportunityDetailPage() {
   const [users, setUsers] = useState([])
   const [teams, setTeams] = useState([])
   const [products, setProducts] = useState([])
+  const [activities, setActivities] = useState([])
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [modal, setModal] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const newTaskRef = useRef(null)
+
+  const loadActivities = () =>
+    api.get(`/opportunity-activities/?opportunity=${opportunityId}`)
+      .then((res) => setActivities(res.data))
 
   const load = () => {
     setLoadError(null)
@@ -46,6 +71,7 @@ export default function OpportunityDetailPage() {
       .then((res) => setOpportunity(res.data))
       .catch(() => setLoadError('No tenés acceso a esta oportunidad o no existe.'))
     api.get(`/tasks/?opportunity=${opportunityId}`).then((res) => setTasks(res.data))
+    loadActivities()
   }
 
   useEffect(() => {
@@ -58,6 +84,21 @@ export default function OpportunityDetailPage() {
   const updateOpportunity = async (data) => {
     setOpportunity((prev) => ({ ...prev, ...data }))
     await api.patch(`/opportunities/${opportunityId}/`, data)
+    // A stage move is logged server-side, so pull the entry it just wrote.
+    if (data.stage) loadActivities()
+  }
+
+  const addActivity = async (kind, body) => {
+    const res = await api.post('/opportunity-activities/', {
+      opportunity: Number(opportunityId), kind, body,
+    })
+    setActivities((prev) => [res.data, ...prev])
+  }
+
+  const deleteActivity = async (activity) => {
+    if (!confirm('¿Eliminar esta actividad de la bitácora?')) return
+    await api.delete(`/opportunity-activities/${activity.id}/`)
+    setActivities((prev) => prev.filter((a) => a.id !== activity.id))
   }
 
   const addTask = async () => {
@@ -112,6 +153,7 @@ export default function OpportunityDetailPage() {
   const markLost = async (reason) => {
     const res = await api.post(`/opportunities/${opportunityId}/mark_lost/`, { reason })
     setOpportunity(res.data)
+    loadActivities()
   }
 
   if (loadError) return <div className="loading">{loadError}</div>
@@ -278,6 +320,14 @@ export default function OpportunityDetailPage() {
         </div>
       </div>
 
+      <div className="opp-section">
+        <div className="opp-section-header">
+          <h2><Activity size={15} /> Bitácora</h2>
+        </div>
+        <ActivityComposer onSubmit={addActivity} />
+        <ActivityTimeline activities={activities} onDelete={deleteActivity} />
+      </div>
+
       {modal?.type === 'complete' && (
         <CompleteTaskModal
           taskTitle={modal.task.title}
@@ -297,6 +347,95 @@ export default function OpportunityDetailPage() {
       {modal?.type === 'quote' && (
         <QuoteFormModal products={products} onClose={() => setModal(null)} onSaved={addQuote} />
       )}
+    </div>
+  )
+}
+
+function ActivityComposer({ onSubmit }) {
+  const [kind, setKind] = useState('note')
+  const [body, setBody] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const active = ACTIVITY_KINDS.find((k) => k.value === kind)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!body.trim() || saving) return
+    setSaving(true)
+    try {
+      await onSubmit(kind, body.trim())
+      setBody('')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="activity-composer" onSubmit={handleSubmit}>
+      <div className="activity-kind-tabs">
+        {ACTIVITY_KINDS.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            type="button"
+            className={`activity-kind-tab ${kind === value ? 'active' : ''}`}
+            onClick={() => setKind(value)}
+          >
+            <Icon size={13} /> {label}
+          </button>
+        ))}
+      </div>
+      <textarea
+        rows={2}
+        value={body}
+        placeholder={active.placeholder}
+        onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter sends; Shift+Enter keeps writing.
+          if (e.key === 'Enter' && !e.shiftKey) handleSubmit(e)
+        }}
+      />
+      <div className="activity-composer-actions">
+        <button type="submit" className="btn btn-primary" disabled={!body.trim() || saving}>
+          {saving ? 'Guardando...' : `Registrar ${active.label.toLowerCase()}`}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function ActivityTimeline({ activities, onDelete }) {
+  if (activities.length === 0) {
+    return <div className="opp-empty-block">Sin actividad registrada todavía</div>
+  }
+
+  return (
+    <div className="activity-timeline">
+      {activities.map((activity) => {
+        const Icon = ACTIVITY_ICONS[activity.kind] ?? MessageSquare
+        return (
+          <div key={activity.id} className={`activity-item ${activity.is_system ? 'system' : ''}`}>
+            <div className={`activity-icon ${activity.kind}`}><Icon size={13} /></div>
+            <div className="activity-body">
+              <div className="activity-meta">
+                <strong>{activity.kind_display}</strong>
+                {activity.author_name && <span>· {activity.author_name}</span>}
+                <span className="activity-time">{formatDateTime(activity.occurred_at)}</span>
+                {!activity.is_system && (
+                  <button className="activity-delete" onClick={() => onDelete(activity)}>
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
+              {activity.is_system && activity.to_stage && (
+                <div className="activity-stage-move">
+                  {activity.from_stage_display ?? '—'} <ArrowRight size={12} /> {activity.to_stage_display}
+                </div>
+              )}
+              {activity.body && <p className="activity-text">{activity.body}</p>}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

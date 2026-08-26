@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 
 
 class Plan(models.Model):
@@ -367,6 +368,7 @@ class Opportunity(models.Model):
             return self.project
 
         with transaction.atomic():
+            previous = self.stage
             project = Project.objects.create(
                 name=self.name,
                 description=f'Proyecto generado desde la oportunidad "{self.name}" ({self.client.name}).',
@@ -378,12 +380,46 @@ class Opportunity(models.Model):
             self.project = project
             self.stage = self.Stage.GANADA
             self.save(update_fields=['project', 'stage', 'updated_at'])
+            OpportunityActivity.objects.create(
+                opportunity=self,
+                kind=OpportunityActivity.Kind.WON,
+                body=f'Proyecto "{project.name}" creado en el equipo {team.name}.',
+                from_stage=previous,
+                to_stage=self.stage,
+                author=user,
+            )
         return project
 
-    def mark_lost(self, reason=''):
+    def mark_lost(self, reason='', user=None):
+        previous = self.stage
         self.stage = self.Stage.PERDIDA
         self.lost_reason = reason
         self.save(update_fields=['stage', 'lost_reason', 'updated_at'])
+        OpportunityActivity.objects.create(
+            opportunity=self,
+            kind=OpportunityActivity.Kind.LOST,
+            body=reason,
+            from_stage=previous,
+            to_stage=self.stage,
+            author=user,
+        )
+
+    def log_stage_change(self, previous, user=None):
+        """Record a stage move that did not come through mark_won / mark_lost."""
+        if previous == self.stage:
+            return None
+        kind = OpportunityActivity.Kind.STAGE_CHANGE
+        if self.stage == self.Stage.GANADA:
+            kind = OpportunityActivity.Kind.WON
+        elif self.stage == self.Stage.PERDIDA:
+            kind = OpportunityActivity.Kind.LOST
+        return OpportunityActivity.objects.create(
+            opportunity=self,
+            kind=kind,
+            from_stage=previous,
+            to_stage=self.stage,
+            author=user,
+        )
 
 
 class Quote(models.Model):
@@ -406,3 +442,45 @@ class Quote(models.Model):
 
     def __str__(self):
         return f'Cotización #{self.id} — {self.opportunity.name}'
+
+
+class OpportunityActivity(models.Model):
+    """One timeline per opportunity: what the team did, and how the stage moved.
+
+    Manual entries (notes, calls, meetings, emails) and system entries (stage
+    moves) share a table so the detail page renders a single chronological
+    story instead of stitching two lists together.
+    """
+
+    class Kind(models.TextChoices):
+        NOTE = 'note', 'Nota'
+        CALL = 'call', 'Llamada'
+        MEETING = 'meeting', 'Reunión'
+        EMAIL = 'email', 'Correo'
+        STAGE_CHANGE = 'stage_change', 'Cambio de etapa'
+        WON = 'won', 'Oportunidad ganada'
+        LOST = 'lost', 'Oportunidad perdida'
+
+    #: Kinds a user may post through the API; the rest are written by the system.
+    MANUAL_KINDS = (Kind.NOTE, Kind.CALL, Kind.MEETING, Kind.EMAIL)
+
+    opportunity = models.ForeignKey(Opportunity, on_delete=models.CASCADE, related_name='activities')
+    kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.NOTE)
+    body = models.TextField(blank=True)
+    from_stage = models.CharField(max_length=20, blank=True)
+    to_stage = models.CharField(max_length=20, blank=True)
+    # Separate from created_at so a call can be logged after it happened.
+    occurred_at = models.DateTimeField(default=timezone.now)
+    author = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-occurred_at', '-id']
+        verbose_name_plural = 'opportunity activities'
+
+    def __str__(self):
+        return f'{self.get_kind_display()} — {self.opportunity.name}'
+
+    @property
+    def is_system(self):
+        return self.kind not in self.MANUAL_KINDS

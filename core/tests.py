@@ -1,6 +1,8 @@
 from rest_framework.test import APITestCase
 
-from .models import Client, Opportunity, Organization, Quote, User
+from .models import (
+    Area, Client, Opportunity, OpportunityActivity, Organization, Quote, Team, User,
+)
 
 
 class CrossTenantCrmTests(APITestCase):
@@ -72,3 +74,94 @@ class CrossTenantCrmTests(APITestCase):
         }, format='json')
         self.assertEqual(quote.status_code, 201)
         self.assertEqual(str(quote.data['total_amount']), '3000.00')
+
+
+class OpportunityTimelineTests(APITestCase):
+    """Stage moves are recorded automatically; notes are posted by the team."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', first_name='Vera', last_name='Soto',
+            organization=self.org, is_sales=True,
+        )
+        self.client_record = Client.objects.create(organization=self.org, name='Cliente A')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=self.client_record, name='Planta nueva',
+        )
+        self.client.login(username='vendedor', password='secret')
+
+    def test_stage_change_is_recorded_with_author_and_stages(self):
+        response = self.client.patch(
+            f'/api/opportunities/{self.opportunity.id}/', {'stage': 'negociacion'}, format='json'
+        )
+        self.assertEqual(response.status_code, 200)
+
+        activity = self.opportunity.activities.get()
+        self.assertEqual(activity.kind, OpportunityActivity.Kind.STAGE_CHANGE)
+        self.assertEqual(activity.from_stage, 'prospecto')
+        self.assertEqual(activity.to_stage, 'negociacion')
+        self.assertEqual(activity.author, self.user)
+
+    def test_editing_other_fields_does_not_create_an_entry(self):
+        self.client.patch(
+            f'/api/opportunities/{self.opportunity.id}/',
+            {'estimated_amount': '4500000'}, format='json',
+        )
+        self.assertEqual(self.opportunity.activities.count(), 0)
+
+    def test_marking_lost_records_the_reason(self):
+        self.client.post(
+            f'/api/opportunities/{self.opportunity.id}/mark_lost/',
+            {'reason': 'Precio fuera de presupuesto'}, format='json',
+        )
+        activity = self.opportunity.activities.get()
+        self.assertEqual(activity.kind, OpportunityActivity.Kind.LOST)
+        self.assertEqual(activity.body, 'Precio fuera de presupuesto')
+        self.assertEqual(activity.to_stage, 'perdida')
+
+    def test_marking_won_records_the_project(self):
+        area = Area.objects.create(organization=self.org, name='Ingeniería')
+        team = Team.objects.create(area=area, name='Montaje')
+
+        response = self.client.post(
+            f'/api/opportunities/{self.opportunity.id}/mark_won/',
+            {'team_id': team.id}, format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+        activity = self.opportunity.activities.get()
+        self.assertEqual(activity.kind, OpportunityActivity.Kind.WON)
+        self.assertIn('Montaje', activity.body)
+
+    def test_can_post_a_note(self):
+        response = self.client.post('/api/opportunity-activities/', {
+            'opportunity': self.opportunity.id,
+            'kind': 'call',
+            'body': 'Llamé a Rodrigo, pide revisar el alcance.',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['author_name'], 'Vera Soto')
+        self.assertFalse(response.data['is_system'])
+
+    def test_cannot_fake_a_stage_change(self):
+        response = self.client.post('/api/opportunity-activities/', {
+            'opportunity': self.opportunity.id,
+            'kind': 'stage_change',
+            'body': 'Movida inventada',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('kind', response.data)
+
+    def test_system_entries_cannot_be_deleted(self):
+        self.client.patch(
+            f'/api/opportunities/{self.opportunity.id}/', {'stage': 'negociacion'}, format='json'
+        )
+        activity = self.opportunity.activities.get()
+
+        response = self.client.delete(f'/api/opportunity-activities/{activity.id}/')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(self.opportunity.activities.filter(pk=activity.pk).exists())

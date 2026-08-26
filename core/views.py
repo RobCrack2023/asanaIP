@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework import permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -9,13 +10,14 @@ from django.contrib.auth import authenticate, login, logout
 from rest_framework.permissions import BasePermission
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, Quote, Product,
+    Client, Opportunity, OpportunityActivity, Quote, Product,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
-    ClientSerializer, OpportunitySerializer, QuoteSerializer, ProductSerializer,
+    ClientSerializer, OpportunitySerializer, OpportunityActivitySerializer,
+    QuoteSerializer, ProductSerializer,
 )
 from . import emails
 from . import notifications as notif
@@ -664,6 +666,11 @@ class OpportunityViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization, owner=self.request.user)
 
+    def perform_update(self, serializer):
+        previous_stage = serializer.instance.stage
+        opportunity = serializer.save()
+        opportunity.log_stage_change(previous_stage, user=self.request.user)
+
     @action(detail=True, methods=['post'])
     def mark_won(self, request, pk=None):
         opportunity = self.get_object()
@@ -681,7 +688,7 @@ class OpportunityViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def mark_lost(self, request, pk=None):
         opportunity = self.get_object()
-        opportunity.mark_lost(reason=request.data.get('reason', ''))
+        opportunity.mark_lost(reason=request.data.get('reason', ''), user=request.user)
         return Response(self.get_serializer(opportunity).data)
 
 
@@ -698,6 +705,30 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization)
+
+
+class OpportunityActivityViewSet(viewsets.ModelViewSet):
+    queryset = OpportunityActivity.objects.select_related('author', 'opportunity').all()
+    serializer_class = OpportunityActivitySerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(
+            opportunity__organization=self.request.user.organization
+        )
+        opportunity_id = self.request.query_params.get('opportunity')
+        if opportunity_id:
+            qs = qs.filter(opportunity_id=opportunity_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+    def perform_destroy(self, instance):
+        # The audit trail is the point; only the manual entries are removable.
+        if instance.is_system:
+            raise ValidationError('Los eventos del sistema no se pueden eliminar.')
+        instance.delete()
 
 
 class QuoteViewSet(viewsets.ModelViewSet):

@@ -18,6 +18,14 @@ export const monthLabel = (month) => {
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${month.slice(0, 4)}`
 }
 
+// Timeline stamps: "12 ago 2026, 15:40"
+export const formatDateTime = (value) => {
+  if (!value) return ''
+  return new Date(value).toLocaleString('es', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 // Months offered in the picker, starting from the current one. A value already
 // stored outside that window (an older opportunity) is kept so editing another
 // field never silently drops it.
