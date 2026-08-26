@@ -10,14 +10,14 @@ from django.contrib.auth import authenticate, login, logout
 from rest_framework.permissions import BasePermission
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, OpportunityActivity, Quote, Product,
+    Client, Opportunity, OpportunityActivity, Quote, Product, ProductPriceEntry,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
     ProjectSerializer, ProjectListSerializer, SectionSerializer, TaskSerializer,
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
     ClientSerializer, OpportunitySerializer, OpportunityActivitySerializer,
-    QuoteSerializer, ProductSerializer,
+    QuoteSerializer, ProductSerializer, ProductPriceEntrySerializer,
 )
 from . import emails
 from . import notifications as notif
@@ -705,6 +705,11 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization)
+
+    @action(detail=True, methods=['get'])
+    def price_history(self, request, pk=None):
+        entries = self.get_object().price_history.select_related('recorded_by')
+        return Response(ProductPriceEntrySerializer(entries, many=True).data)
 
 
 class OpportunityActivityViewSet(viewsets.ModelViewSet):

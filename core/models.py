@@ -5,6 +5,19 @@ from django.db import models
 from django.utils import timezone
 
 
+def markup(price, cost):
+    """Margin the way the evaluación spreadsheets state it: price / cost - 1.
+
+    Selling at three times cost is a margin of 2.0, not 0.67 — this is markup
+    over cost, not gross margin over the sale price. Returns None when there
+    is no cost to mark up, since dividing by zero would report an infinite
+    margin on an item that is simply not costed yet.
+    """
+    if not cost:
+        return None
+    return ((Decimal(price) / Decimal(cost)) - Decimal('1')).quantize(Decimal('0.0001'))
+
+
 class Plan(models.Model):
     name = models.CharField(max_length=50)
     max_users = models.PositiveIntegerField(default=10)
@@ -313,17 +326,29 @@ class Client(models.Model):
 
 
 class Product(models.Model):
-    """Catalog of products and services quoted to clients."""
+    """Shared master catalog of products and services quoted to clients.
+
+    Carries both sides of the deal: what the item costs landed (`cost`) and
+    what it is sold for (`unit_price`). Every change to either is kept in
+    price_history, so a price can always be explained months later.
+    """
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='products')
     name = models.CharField(max_length=200)
     sku = models.CharField(max_length=50, blank=True)
     description = models.TextField(blank=True)
     unit = models.CharField(max_length=20, blank=True, default='unidad')
+    #: Landed cost in CLP — the DDP figure, import charges already included.
+    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    supplier = models.CharField(max_length=200, blank=True)
+    lead_time_days = models.PositiveIntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    #: Fields whose change is worth a history entry.
+    PRICED_FIELDS = ('cost', 'unit_price', 'supplier')
 
     class Meta:
         ordering = ['name']
@@ -337,6 +362,58 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def margin(self):
+        """Markup over cost, the convention used in the evaluación sheets.
+
+        A margin of 3.0 means the item sells for four times its cost. This is
+        deliberately not gross margin over the sale price — the two produce
+        very different numbers and the team reads this one.
+        """
+        return markup(self.unit_price, self.cost)
+
+    @property
+    def unit_profit(self):
+        return self.unit_price - self.cost
+
+    def record_price(self, user=None, note=''):
+        return ProductPriceEntry.objects.create(
+            product=self,
+            cost=self.cost,
+            unit_price=self.unit_price,
+            supplier=self.supplier,
+            note=note,
+            recorded_by=user,
+        )
+
+
+class ProductPriceEntry(models.Model):
+    """What a product cost and sold for at a point in time.
+
+    Written whenever cost, price or supplier changes, so the catalog can
+    answer "what were we paying for this in 2024, and who supplied it?".
+    """
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='price_history')
+    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    supplier = models.CharField(max_length=200, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='+')
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-recorded_at', '-id']
+        verbose_name_plural = 'product price entries'
+
+    def __str__(self):
+        return f'{self.product.name} — {self.recorded_at:%Y-%m-%d}'
+
+    @property
+    def margin(self):
+        return markup(self.unit_price, self.cost)
 
 
 class Opportunity(models.Model):
@@ -448,6 +525,7 @@ class Quote(models.Model):
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=DEFAULT_TAX_RATE)
     # Derived from the items by recalculate(); never written by the client.
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
@@ -493,13 +571,26 @@ class Quote(models.Model):
         return self.number
 
     def recalculate(self, save=True):
-        subtotal = sum((item.subtotal for item in self.items.all()), Decimal('0'))
+        items = list(self.items.all())
+        subtotal = sum((item.subtotal for item in items), Decimal('0'))
+        total_cost = sum((item.cost_subtotal for item in items), Decimal('0'))
         self.subtotal = subtotal.quantize(Decimal('0.01'))
+        self.total_cost = total_cost.quantize(Decimal('0.01'))
         self.tax_amount = (self.subtotal * self.tax_rate / Decimal('100')).quantize(Decimal('0.01'))
         self.total_amount = self.subtotal + self.tax_amount
         if save:
-            self.save(update_fields=['subtotal', 'tax_amount', 'total_amount', 'updated_at'])
+            self.save(update_fields=['subtotal', 'total_cost', 'tax_amount', 'total_amount',
+                                     'updated_at'])
         return self.total_amount
+
+    @property
+    def total_profit(self):
+        """Profit on the net figure — tax is collected for the state, not earned."""
+        return self.subtotal - self.total_cost
+
+    @property
+    def margin(self):
+        return markup(self.subtotal, self.total_cost)
 
 
 class QuoteItem(models.Model):
@@ -516,6 +607,8 @@ class QuoteItem(models.Model):
     description = models.CharField(max_length=200)
     unit = models.CharField(max_length=20, blank=True, default='unidad')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
+    #: Landed cost per unit at the time of quoting, copied from the catalog.
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     order = models.PositiveIntegerField(default=0)
@@ -531,6 +624,19 @@ class QuoteItem(models.Model):
         gross = self.quantity * self.unit_price
         discount = gross * self.discount_percent / Decimal('100')
         return (gross - discount).quantize(Decimal('0.01'))
+
+    @property
+    def cost_subtotal(self):
+        return (self.quantity * self.unit_cost).quantize(Decimal('0.01'))
+
+    @property
+    def profit(self):
+        return self.subtotal - self.cost_subtotal
+
+    @property
+    def margin(self):
+        """Markup actually achieved on this line, discount included."""
+        return markup(self.subtotal, self.cost_subtotal)
 
 
 class OpportunityActivity(models.Model):

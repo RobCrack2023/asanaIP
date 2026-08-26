@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, QuoteItem, Product,
+    ProductPriceEntry,
 )
 
 
@@ -204,16 +205,37 @@ class ClientSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class ProductPriceEntrySerializer(serializers.ModelSerializer):
+    recorded_by_name = serializers.CharField(source='recorded_by.get_full_name',
+                                             read_only=True, default=None)
+    margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
+
+    class Meta:
+        model = ProductPriceEntry
+        fields = ['id', 'cost', 'unit_price', 'margin', 'supplier', 'note',
+                  'recorded_by', 'recorded_by_name', 'recorded_at']
+        read_only_fields = fields
+
+
 class ProductSerializer(serializers.ModelSerializer):
+    margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
+    unit_profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'description', 'unit', 'unit_price', 'is_active',
+        fields = ['id', 'name', 'sku', 'description', 'unit', 'cost', 'unit_price',
+                  'margin', 'unit_profit', 'supplier', 'lead_time_days', 'is_active',
                   'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'margin', 'unit_profit', 'created_at', 'updated_at']
 
     def validate_unit_price(self, value):
         if value < 0:
             raise serializers.ValidationError('El precio no puede ser negativo.')
+        return value
+
+    def validate_cost(self, value):
+        if value < 0:
+            raise serializers.ValidationError('El costo no puede ser negativo.')
         return value
 
     def validate_sku(self, value):
@@ -228,16 +250,36 @@ class ProductSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Ya existe un producto con este código.')
         return sku
 
+    def _user(self):
+        request = self.context.get('request')
+        return getattr(request, 'user', None) if request else None
+
+    def create(self, validated_data):
+        product = super().create(validated_data)
+        product.record_price(user=self._user(), note='Alta en el catálogo.')
+        return product
+
+    def update(self, instance, validated_data):
+        before = {field: getattr(instance, field) for field in Product.PRICED_FIELDS}
+        product = super().update(instance, validated_data)
+        # Renaming a product or flipping is_active is not a price change.
+        if any(getattr(product, field) != before[field] for field in Product.PRICED_FIELDS):
+            product.record_price(user=self._user())
+        return product
+
 
 class QuoteItemSerializer(serializers.ModelSerializer):
     product = OrgScopedRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    cost_subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
 
     class Meta:
         model = QuoteItem
-        fields = ['id', 'product', 'description', 'unit', 'quantity', 'unit_price',
-                  'discount_percent', 'subtotal', 'order']
-        read_only_fields = ['id', 'subtotal']
+        fields = ['id', 'product', 'description', 'unit', 'quantity', 'unit_cost', 'unit_price',
+                  'discount_percent', 'subtotal', 'cost_subtotal', 'profit', 'margin', 'order']
+        read_only_fields = ['id', 'subtotal', 'cost_subtotal', 'profit', 'margin']
 
     def validate_description(self, value):
         description = (value or '').strip()
@@ -255,6 +297,11 @@ class QuoteItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('El precio unitario no puede ser negativo.')
         return value
 
+    def validate_unit_cost(self, value):
+        if value < 0:
+            raise serializers.ValidationError('El costo unitario no puede ser negativo.')
+        return value
+
     def validate_discount_percent(self, value):
         if not 0 <= value <= 100:
             raise serializers.ValidationError('El descuento debe estar entre 0 y 100.')
@@ -267,17 +314,19 @@ class QuoteSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     reference = serializers.CharField(read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
+    total_profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
 
     class Meta:
         model = Quote
         fields = ['id', 'opportunity', 'number', 'reference', 'status', 'status_display',
                   'issue_date', 'valid_until', 'is_expired', 'tax_rate', 'items',
-                  'subtotal', 'tax_amount', 'total_amount', 'notes',
-                  'created_at', 'updated_at']
+                  'subtotal', 'total_cost', 'total_profit', 'margin',
+                  'tax_amount', 'total_amount', 'notes', 'created_at', 'updated_at']
         # Every money figure is derived from the items; the client sends the
         # breakdown and the rate, never the sums.
-        read_only_fields = ['id', 'number', 'subtotal', 'tax_amount', 'total_amount',
-                            'created_at', 'updated_at']
+        read_only_fields = ['id', 'number', 'subtotal', 'total_cost', 'total_profit', 'margin',
+                            'tax_amount', 'total_amount', 'created_at', 'updated_at']
 
     def validate_tax_rate(self, value):
         if not 0 <= value <= 100:

@@ -471,7 +471,8 @@ function QuoteCard({ quote, onDelete }) {
           <div className="quote-items-head">
             <span>Descripción</span>
             <span>Cant.</span>
-            <span>Precio unitario</span>
+            <span>Costo unit.</span>
+            <span>Precio unit.</span>
             <span>Desc. %</span>
             <span>Subtotal</span>
           </div>
@@ -479,12 +480,20 @@ function QuoteCard({ quote, onDelete }) {
             <div key={item.id} className="quote-detail-row">
               <span>{item.description}</span>
               <span>{Number(item.quantity)}</span>
+              <span className="qd-cost">{formatMoney(item.unit_cost)}</span>
               <span>{formatMoney(item.unit_price)}</span>
               <span>{Number(item.discount_percent) ? `${Number(item.discount_percent)}%` : '—'}</span>
               <span>{formatMoney(item.subtotal)}</span>
             </div>
           ))}
           <div className="quote-detail-totals">
+            <div className="quote-total-line muted">
+              <span>Costo</span><span>{formatMoney(quote.total_cost)}</span>
+            </div>
+            <div className="quote-total-line profit">
+              <span>Utilidad · margen {formatMargin(quote.margin)}</span>
+              <span>{formatMoney(quote.total_profit)}</span>
+            </div>
             <div className="quote-total-line">
               <span>Neto</span><span>{formatMoney(quote.subtotal)}</span>
             </div>
@@ -504,7 +513,12 @@ function QuoteCard({ quote, onDelete }) {
   )
 }
 
-const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_price: '', discount_percent: '' })
+const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_cost: '', unit_price: '', discount_percent: '' })
+
+const itemCost = (item) => (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)
+
+// Markup over cost, matching how the evaluación sheets state margin.
+const formatMargin = (margin) => (margin == null ? '—' : `${(Number(margin) * 100).toFixed(0)}%`)
 
 const itemSubtotal = (item) => {
   const gross = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
@@ -525,6 +539,9 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
 
   // Mirrors what the server will compute, so the figures never disagree.
   const subtotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0)
+  const totalCost = items.reduce((sum, item) => sum + itemCost(item), 0)
+  const profit = subtotal - totalCost
+  const margin = totalCost ? subtotal / totalCost - 1 : null
   const taxAmount = subtotal * (Number(taxRate) || 0) / 100
   const total = subtotal + taxAmount
 
@@ -543,6 +560,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
       description: product.name,
       unit: product.unit || 'unidad',
       quantity: '1',
+      unit_cost: String(product.cost ?? ''),
       unit_price: String(product.unit_price ?? ''),
       discount_percent: '',
     }
@@ -580,6 +598,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
           description: item.description.trim(),
           unit: item.unit || 'unidad',
           quantity: Number(item.quantity),
+          unit_cost: Number(item.unit_cost) || 0,
           unit_price: Number(item.unit_price) || 0,
           discount_percent: Number(item.discount_percent) || 0,
         })),
@@ -606,7 +625,8 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
             <div className="quote-items-head">
               <span>Descripción</span>
               <span>Cant.</span>
-              <span>Precio unitario</span>
+              <span>Costo unit.</span>
+              <span>Precio unit.</span>
               <span>Desc. %</span>
               <span>Subtotal</span>
               <span></span>
@@ -625,6 +645,15 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
                   step="any"
                   value={item.quantity}
                   onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  className="quote-cost-input"
+                  value={item.unit_cost}
+                  onChange={(e) => updateItem(index, 'unit_cost', e.target.value)}
+                  placeholder="0"
                 />
                 <input
                   type="number"
@@ -678,6 +707,14 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
         </div>
 
         <div className="quote-totals">
+          <div className="quote-total-line muted">
+            <span>Costo</span>
+            <span>{formatMoney(totalCost)}</span>
+          </div>
+          <div className="quote-total-line profit">
+            <span>Utilidad · margen {formatMargin(margin)}</span>
+            <span>{formatMoney(profit)}</span>
+          </div>
           <div className="quote-total-line">
             <span>Neto</span>
             <span>{formatMoney(subtotal)}</span>

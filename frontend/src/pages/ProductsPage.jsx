@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
-import { Package, Edit2, Trash2, Search } from 'lucide-react'
+import { Package, Edit2, Trash2, Search, History } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
+import { formatMoney } from '../stages'
+import { formatDateTime } from '../dates'
 import './ProductsPage.css'
 
-const formatMoney = (amount) =>
-  new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
-    .format(Number(amount) || 0)
+// Margin the way the evaluación sheets state it: markup over cost, so 1.8
+// means the item sells for 2.8 times what it cost.
+const formatMargin = (margin) =>
+  margin == null ? '—' : `${(Number(margin) * 100).toFixed(0)}%`
 
 export default function ProductsPage() {
   const [products, setProducts] = useState([])
@@ -66,7 +69,10 @@ export default function ProductsPage() {
           <span className="pt-col-sku">Código</span>
           <span className="pt-col-name">Producto</span>
           <span className="pt-col-unit">Unidad</span>
-          <span className="pt-col-price">Precio unitario</span>
+          <span className="pt-col-supplier">Proveedor</span>
+          <span className="pt-col-money">Costo</span>
+          <span className="pt-col-money">Precio</span>
+          <span className="pt-col-margin">Margen</span>
           <span className="pt-col-actions"></span>
         </div>
 
@@ -78,7 +84,12 @@ export default function ProductsPage() {
               {product.description && <span className="pt-description">{product.description}</span>}
             </div>
             <span className="pt-col-unit">{product.unit || '—'}</span>
-            <span className="pt-col-price">{formatMoney(product.unit_price)}</span>
+            <span className="pt-col-supplier">{product.supplier || '—'}</span>
+            <span className="pt-col-money cost">{formatMoney(product.cost)}</span>
+            <span className="pt-col-money">{formatMoney(product.unit_price)}</span>
+            <span className={`pt-col-margin ${product.margin == null ? 'unset' : ''}`}>
+              {formatMargin(product.margin)}
+            </span>
             <div className="pt-col-actions">
               <button
                 className="pt-action-btn"
@@ -86,6 +97,13 @@ export default function ProductsPage() {
                 onClick={() => toggleActive(product)}
               >
                 {product.is_active ? 'Activo' : 'Inactivo'}
+              </button>
+              <button
+                className="pt-action-btn"
+                title="Historial de precios"
+                onClick={() => setModal({ type: 'history', product })}
+              >
+                <History size={14} />
               </button>
               <button className="pt-action-btn" title="Editar" onClick={() => setModal({ type: 'edit', product })}>
                 <Edit2 size={14} />
@@ -110,6 +128,9 @@ export default function ProductsPage() {
       {modal?.type === 'edit' && (
         <ProductFormModal product={modal.product} onClose={() => setModal(null)} onSaved={load} />
       )}
+      {modal?.type === 'history' && (
+        <PriceHistoryModal product={modal.product} onClose={() => setModal(null)} />
+      )}
     </div>
   )
 }
@@ -121,12 +142,18 @@ function ProductFormModal({ product, onClose, onSaved }) {
     sku: product?.sku || '',
     description: product?.description || '',
     unit: product?.unit || 'unidad',
+    cost: product?.cost ?? '',
     unit_price: product?.unit_price ?? '',
+    supplier: product?.supplier || '',
+    lead_time_days: product?.lead_time_days ?? '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const handleChange = (field, value) => setForm((prev) => ({ ...prev, [field]: value }))
+
+  const cost = Number(form.cost) || 0
+  const liveMargin = cost ? (Number(form.unit_price) || 0) / cost - 1 : null
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -137,7 +164,12 @@ function ProductFormModal({ product, onClose, onSaved }) {
     setSaving(true)
     setError('')
     try {
-      const payload = { ...form, unit_price: form.unit_price || 0 }
+      const payload = {
+        ...form,
+        cost: form.cost || 0,
+        unit_price: form.unit_price || 0,
+        lead_time_days: form.lead_time_days === '' ? null : Number(form.lead_time_days),
+      }
       if (isEdit) {
         await api.patch(`/products/${product.id}/`, payload)
       } else {
@@ -147,7 +179,8 @@ function ProductFormModal({ product, onClose, onSaved }) {
       onClose()
     } catch (err) {
       const data = err.response?.data
-      setError(data?.sku?.[0] || data?.unit_price?.[0] || 'Error al guardar el producto')
+      setError(data?.sku?.[0] || data?.cost?.[0] || data?.unit_price?.[0]
+        || 'Error al guardar el producto')
       setSaving(false)
     }
   }
@@ -173,9 +206,34 @@ function ProductFormModal({ product, onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="modal-field">
-          <label>Precio unitario</label>
-          <input type="number" min="0" step="any" value={form.unit_price} onChange={(e) => handleChange('unit_price', e.target.value)} placeholder="0" />
+        <div className="form-row">
+          <div className="modal-field">
+            <label>Costo (CLP)</label>
+            <input type="number" min="0" step="any" value={form.cost} onChange={(e) => handleChange('cost', e.target.value)} placeholder="0" />
+          </div>
+          <div className="modal-field">
+            <label>Precio unitario</label>
+            <input type="number" min="0" step="any" value={form.unit_price} onChange={(e) => handleChange('unit_price', e.target.value)} placeholder="0" />
+          </div>
+        </div>
+
+        <div className="product-margin-preview">
+          <span>Margen sobre costo</span>
+          <strong>{formatMargin(liveMargin)}</strong>
+          <span className="product-margin-profit">
+            Utilidad {formatMoney((Number(form.unit_price) || 0) - (Number(form.cost) || 0))}
+          </span>
+        </div>
+
+        <div className="form-row">
+          <div className="modal-field">
+            <label>Proveedor</label>
+            <input value={form.supplier} onChange={(e) => handleChange('supplier', e.target.value)} placeholder="Ej: Prodalam" />
+          </div>
+          <div className="modal-field">
+            <label>Plazo de entrega (días)</label>
+            <input type="number" min="0" value={form.lead_time_days} onChange={(e) => handleChange('lead_time_days', e.target.value)} placeholder="30" />
+          </div>
         </div>
 
         <div className="modal-field">
@@ -190,6 +248,75 @@ function ProductFormModal({ product, onClose, onSaved }) {
           </button>
         </div>
       </form>
+    </Modal>
+  )
+}
+
+
+function PriceHistoryModal({ product, onClose }) {
+  const [entries, setEntries] = useState(null)
+
+  useEffect(() => {
+    api.get(`/products/${product.id}/price_history/`).then((res) => setEntries(res.data))
+  }, [product.id])
+
+  // Entries arrive newest first; the delta compares each one with the entry
+  // that preceded it in time, which sits one position later in the list.
+  const costDelta = (index) => {
+    if (!entries || index >= entries.length - 1) return null
+    const previous = Number(entries[index + 1].cost)
+    if (!previous) return null
+    return (Number(entries[index].cost) - previous) / previous
+  }
+
+  return (
+    <Modal title={`Historial de precios — ${product.name}`} onClose={onClose} className="modal-wide">
+      {entries === null && <div className="products-empty">Cargando...</div>}
+
+      {entries?.length === 0 && (
+        <div className="products-empty">Sin cambios registrados todavía</div>
+      )}
+
+      {entries?.length > 0 && (
+        <div className="price-history">
+          <div className="price-history-head">
+            <span>Fecha</span>
+            <span>Costo</span>
+            <span>Var.</span>
+            <span>Precio</span>
+            <span>Margen</span>
+            <span>Proveedor</span>
+            <span>Registró</span>
+          </div>
+          {entries.map((entry, index) => {
+            const delta = costDelta(index)
+            return (
+              <div key={entry.id} className="price-history-row">
+                <span className="ph-date">{formatDateTime(entry.recorded_at)}</span>
+                <span>{formatMoney(entry.cost)}</span>
+                <span className={`ph-delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}`}>
+                  {delta == null ? '—' : `${delta > 0 ? '+' : ''}${(delta * 100).toFixed(1)}%`}
+                </span>
+                <span>{formatMoney(entry.unit_price)}</span>
+                <span>{formatMargin(entry.margin)}</span>
+                <span className="ph-supplier">{entry.supplier || '—'}</span>
+                <span className="ph-author">{entry.recorded_by_name || '—'}</span>
+              </div>
+            )
+          })}
+          {entries.some((e) => e.note) && (
+            <div className="price-history-notes">
+              {entries.filter((e) => e.note).map((e) => (
+                <div key={e.id}>{formatDateTime(e.recorded_at)} — {e.note}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="modal-actions">
+        <button type="button" className="btn btn-secondary" onClick={onClose}>Cerrar</button>
+      </div>
     </Modal>
   )
 }
