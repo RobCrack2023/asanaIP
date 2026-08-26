@@ -3,8 +3,8 @@ from decimal import Decimal
 from rest_framework.test import APITestCase
 
 from .models import (
-    Area, Client, Opportunity, OpportunityActivity, Organization, Product,
-    ProductPriceEntry, Quote, QuoteItem, Team, User,
+    Area, Client, ExchangeRate, Opportunity, OpportunityActivity, Organization,
+    Product, ProductPriceEntry, Quote, QuoteItem, Team, User,
 )
 
 
@@ -314,8 +314,8 @@ class ProductCostHistoryTests(APITestCase):
         self.client.login(username='vendedor', password='secret')
 
     def _create(self, **extra):
-        payload = {'name': 'Cerco perimetral 5x5', 'cost': '900000', 'unit_price': '2520000',
-                   'supplier': 'Prodalam'}
+        payload = {'name': 'Cerco perimetral 5x5', 'cost_amount': '900000',
+                   'unit_price': '2520000', 'supplier': 'Prodalam'}
         payload.update(extra)
         return self.client.post('/api/products/', payload, format='json')
 
@@ -328,7 +328,7 @@ class ProductCostHistoryTests(APITestCase):
         self.assertEqual(str(response.data['unit_profit']), '1620000.00')
 
     def test_margin_is_null_without_a_cost(self):
-        response = self._create(cost='0')
+        response = self._create(cost_amount='0')
         self.assertIsNone(response.data['margin'])
 
     def test_creating_a_product_opens_its_history(self):
@@ -342,7 +342,8 @@ class ProductCostHistoryTests(APITestCase):
     def test_a_cost_change_is_recorded(self):
         created = self._create()
 
-        self.client.patch(f"/api/products/{created.data['id']}/", {'cost': '990000'}, format='json')
+        self.client.patch(f"/api/products/{created.data['id']}/",
+                          {'cost_amount': '990000'}, format='json')
 
         history = self.client.get(f"/api/products/{created.data['id']}/price_history/").data
         self.assertEqual(len(history), 2)
@@ -443,7 +444,8 @@ class QuoteProfitTests(APITestCase):
 
     def test_editing_the_catalog_does_not_restate_a_quoted_cost(self):
         product = Product.objects.create(
-            organization=self.org, name='Cerco', cost=900000, unit_price=2520000,
+            organization=self.org, name='Cerco', cost_amount=900000, cost=900000,
+            unit_price=2520000,
         )
         self._post_quote([{
             'product': product.id, 'description': 'Cerco', 'quantity': 1,
@@ -455,3 +457,202 @@ class QuoteProfitTests(APITestCase):
 
         item = QuoteItem.objects.get()
         self.assertEqual(item.unit_cost, Decimal('900000'))
+
+
+class ExchangeRateTests(APITestCase):
+    """Imported costs land in pesos through the company's rate table."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+    def _set_rates(self, uf='35800', usd='950', eur='980', date='2026-08-25'):
+        return self.client.post('/api/exchange-rates/', {
+            'date': date, 'uf': uf, 'usd': usd, 'eur': eur,
+        }, format='json')
+
+    def _create_product(self, **extra):
+        payload = {'name': 'Datalogger CR1000X', 'unit_price': '3479612.5'}
+        payload.update(extra)
+        return self.client.post('/api/products/', payload, format='json')
+
+    def test_a_ddp_cost_ignores_the_import_multiplier(self):
+        """AES sheet row 15: USD 2.817,5 at 950 DDP is 2.676.625 — the 1,1 is not applied.
+
+        Under DDP the supplier already covers freight and duties.
+        """
+        self._set_rates()
+
+        response = self._create_product(
+            currency='USD', cost_amount='2817.5', incoterm='DDP', import_multiplier='1.1',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(str(response.data['cost']), '2676625.00')
+        self.assertEqual(str(response.data['cost_rate']), '950.00')
+
+    def test_a_cif_cost_adds_the_import_multiplier(self):
+        """AES sheet row 17: EUR 1.733,8 at 980 CIF with 1,1 is 1.869.036,40."""
+        self._set_rates()
+
+        response = self._create_product(
+            name='Estación HD52.3D147', currency='EUR', cost_amount='1733.8',
+            incoterm='CIF', import_multiplier='1.1',
+        )
+
+        self.assertEqual(str(response.data['cost']), '1869036.40')
+
+    def test_the_same_purchase_costs_more_when_we_clear_customs(self):
+        self._set_rates()
+        ddp = self._create_product(name='A', currency='USD', cost_amount='1000',
+                                   incoterm='DDP', import_multiplier='1.2')
+        fob = self._create_product(name='B', currency='USD', cost_amount='1000',
+                                   incoterm='FOB', import_multiplier='1.2')
+
+        self.assertEqual(str(ddp.data['cost']), '950000.00')
+        self.assertEqual(str(fob.data['cost']), '1140000.00')
+
+    def test_a_peso_cost_is_taken_as_is(self):
+        self._set_rates()
+
+        response = self._create_product(name='Cerco', currency='CLP', cost_amount='900000')
+
+        self.assertEqual(str(response.data['cost']), '900000.00')
+        self.assertEqual(str(response.data['cost_rate']), '1.00')
+
+    def test_costing_in_a_currency_with_no_rate_is_refused(self):
+        response = self._create_product(currency='USD', cost_amount='2817.5')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('currency', response.data)
+
+    def test_a_moved_rate_marks_the_cost_stale_without_changing_it(self):
+        self._set_rates()
+        created = self._create_product(currency='USD', cost_amount='2817.5')
+
+        self._set_rates(usd='1000', date='2026-08-26')
+
+        product = self.client.get(f"/api/products/{created.data['id']}/").data
+        self.assertTrue(product['cost_is_stale'])
+        # Still the old figure: rates are never applied behind the user's back.
+        self.assertEqual(str(product['cost']), '2676625.00')
+
+    def test_refreshing_restates_the_cost_and_records_it(self):
+        self._set_rates()
+        created = self._create_product(currency='USD', cost_amount='2817.5')
+        self._set_rates(usd='1000', date='2026-08-26')
+
+        refresh = self.client.post('/api/products/refresh_costs/', {}, format='json')
+
+        self.assertEqual(refresh.data['updated'], 1)
+        product = self.client.get(f"/api/products/{created.data['id']}/").data
+        self.assertEqual(str(product['cost']), '2817500.00')
+        self.assertFalse(product['cost_is_stale'])
+
+        history = self.client.get(f"/api/products/{created.data['id']}/price_history/").data
+        self.assertEqual(len(history), 2)
+        self.assertIn('1000', history[0]['note'])
+        self.assertEqual(str(history[1]['cost_rate']), '950.00')
+
+    def test_refreshing_leaves_peso_products_alone(self):
+        self._set_rates()
+        self._create_product(name='Cerco', currency='CLP', cost_amount='900000')
+        self._set_rates(usd='1000', date='2026-08-26')
+
+        refresh = self.client.post('/api/products/refresh_costs/', {}, format='json')
+
+        self.assertEqual(refresh.data['updated'], 0)
+
+    def test_refreshing_without_rates_is_refused(self):
+        response = self.client.post('/api/products/refresh_costs/', {}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_recording_the_same_day_twice_overwrites_it(self):
+        self._set_rates()
+        corrected = self._set_rates(usd='999')
+
+        self.assertEqual(corrected.status_code, 201)
+        self.assertEqual(str(corrected.data['usd']), '999.00')
+        self.assertEqual(ExchangeRate.objects.count(), 1)
+
+    def test_current_returns_the_most_recent_day(self):
+        self._set_rates(usd='950', date='2026-08-25')
+        self._set_rates(usd='1000', date='2026-08-26')
+
+        current = self.client.get('/api/exchange-rates/current/')
+
+        self.assertEqual(str(current.data['usd']), '1000.00')
+
+    def test_current_is_empty_before_any_rate_is_loaded(self):
+        self.assertIsNone(self.client.get('/api/exchange-rates/current/').data)
+
+    def test_rates_are_scoped_to_the_organization(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        ExchangeRate.objects.create(organization=other, date='2026-08-25', usd=Decimal('9999'))
+
+        self.assertEqual(len(self.client.get('/api/exchange-rates/').data), 0)
+
+
+class QuoteCurrencyTests(APITestCase):
+    """A quote keeps the rates it was issued with, and can be read in any of them."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        client_record = Client.objects.create(organization=self.org, name='AES')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client_record, name='Estación Solar Oriente',
+        )
+        self.client.login(username='vendedor', password='secret')
+
+    def _quote(self, **extra):
+        return self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'items': [{'description': 'Cerco', 'quantity': 1,
+                       'unit_cost': '900000', 'unit_price': '2520000'}],
+            **extra,
+        }, format='json')
+
+    def test_rates_are_stamped_at_issue_time(self):
+        ExchangeRate.objects.create(organization=self.org, date='2026-08-25',
+                                    uf=Decimal('35800'), usd=Decimal('950'), eur=Decimal('980'))
+
+        response = self._quote()
+
+        self.assertEqual(str(response.data['rate_usd']), '950.00')
+        self.assertEqual(str(response.data['rate_uf']), '35800.00')
+
+    def test_a_later_rate_move_does_not_restate_an_issued_quote(self):
+        ExchangeRate.objects.create(organization=self.org, date='2026-08-25', usd=Decimal('950'))
+        created = self._quote()
+
+        ExchangeRate.objects.create(organization=self.org, date='2026-08-26', usd=Decimal('1100'))
+
+        quote = self.client.get(f"/api/quotes/{created.data['id']}/").data
+        self.assertEqual(str(quote['rate_usd']), '950.00')
+
+    def test_display_currency_exposes_its_divisor(self):
+        ExchangeRate.objects.create(organization=self.org, date='2026-08-25',
+                                    uf=Decimal('35800'), usd=Decimal('950'))
+
+        response = self._quote(display_currency='USD')
+
+        self.assertEqual(response.data['display_currency'], 'USD')
+        self.assertEqual(str(response.data['display_rate']), '950.00')
+        # Amounts stay in pesos; only the presentation changes.
+        self.assertEqual(str(response.data['subtotal']), '2520000.00')
+
+    def test_pesos_need_no_conversion(self):
+        response = self._quote()
+        self.assertEqual(str(response.data['display_rate']), '1.00')
+
+    def test_a_missing_rate_never_blanks_the_document(self):
+        """Asking for USD with no dollar loaded must not divide by zero."""
+        response = self._quote(display_currency='USD')
+
+        self.assertEqual(str(response.data['display_rate']), '1.00')

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Package, Edit2, Trash2, Search, History } from 'lucide-react'
+import { Package, Edit2, Trash2, Search, History, RefreshCw, Coins, AlertTriangle } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExchangeRatesModal from '../components/ExchangeRatesModal'
 import { formatMoney } from '../stages'
 import { formatDateTime } from '../dates'
 import './ProductsPage.css'
@@ -11,16 +12,42 @@ import './ProductsPage.css'
 const formatMargin = (margin) =>
   margin == null ? '—' : `${(Number(margin) * 100).toFixed(0)}%`
 
+const CURRENCIES = ['CLP', 'USD', 'EUR', 'UF']
+
+// DDP means the supplier delivers duty paid, so there is nothing to add on
+// top — the multiplier only applies under the other terms.
+const INCOTERMS = ['DDP', 'DAP', 'CIF', 'FOB', 'EXW']
+
+const formatAmount = (amount, currency) =>
+  currency === 'CLP'
+    ? formatMoney(amount)
+    : `${currency} ${Number(amount || 0).toLocaleString('es-CL', { maximumFractionDigits: 2 })}`
+
 export default function ProductsPage() {
   const [products, setProducts] = useState([])
+  const [rates, setRates] = useState(null)
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   const load = () => {
     api.get('/products/').then((res) => setProducts(res.data))
+    api.get('/exchange-rates/current/').then((res) => setRates(res.data))
   }
 
   useEffect(() => { load() }, [])
+
+  const staleCount = products.filter((p) => p.cost_is_stale).length
+
+  const refreshCosts = async () => {
+    setRefreshing(true)
+    try {
+      await api.post('/products/refresh_costs/', {})
+      load()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const filtered = products.filter((p) => {
     const term = search.toLowerCase()
@@ -62,7 +89,28 @@ export default function ProductsPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+
+        <button className="rates-chip" onClick={() => setModal({ type: 'rates' })}>
+          <Coins size={13} />
+          {rates
+            ? `UF ${Number(rates.uf).toLocaleString('es-CL')} · USD ${Number(rates.usd).toLocaleString('es-CL')} · EUR ${Number(rates.eur).toLocaleString('es-CL')}`
+            : 'Cargar tipos de cambio'}
+        </button>
       </div>
+
+      {staleCount > 0 && (
+        <div className="stale-costs-banner">
+          <AlertTriangle size={14} />
+          <span>
+            {staleCount} {staleCount === 1 ? 'producto tiene' : 'productos tienen'} el costo
+            calculado con un tipo de cambio anterior.
+          </span>
+          <button className="btn btn-primary" onClick={refreshCosts} disabled={refreshing}>
+            <RefreshCw size={13} />
+            {refreshing ? 'Actualizando...' : 'Actualizar costos'}
+          </button>
+        </div>
+      )}
 
       <div className="products-table">
         <div className="products-table-header">
@@ -85,7 +133,15 @@ export default function ProductsPage() {
             </div>
             <span className="pt-col-unit">{product.unit || '—'}</span>
             <span className="pt-col-supplier">{product.supplier || '—'}</span>
-            <span className="pt-col-money cost">{formatMoney(product.cost)}</span>
+            <span className="pt-col-money cost">
+              {formatMoney(product.cost)}
+              {product.currency !== 'CLP' && (
+                <span className={`pt-origin ${product.cost_is_stale ? 'stale' : ''}`}>
+                  {formatAmount(product.cost_amount, product.currency)}
+                  {product.incoterm !== 'DDP' && ` ·${product.incoterm}`}
+                </span>
+              )}
+            </span>
             <span className="pt-col-money">{formatMoney(product.unit_price)}</span>
             <span className={`pt-col-margin ${product.margin == null ? 'unset' : ''}`}>
               {formatMargin(product.margin)}
@@ -123,26 +179,32 @@ export default function ProductsPage() {
       </div>
 
       {modal?.type === 'create' && (
-        <ProductFormModal onClose={() => setModal(null)} onSaved={load} />
+        <ProductFormModal rates={rates} onClose={() => setModal(null)} onSaved={load} />
       )}
       {modal?.type === 'edit' && (
-        <ProductFormModal product={modal.product} onClose={() => setModal(null)} onSaved={load} />
+        <ProductFormModal rates={rates} product={modal.product} onClose={() => setModal(null)} onSaved={load} />
       )}
       {modal?.type === 'history' && (
         <PriceHistoryModal product={modal.product} onClose={() => setModal(null)} />
+      )}
+      {modal?.type === 'rates' && (
+        <ExchangeRatesModal onClose={() => setModal(null)} onSaved={load} />
       )}
     </div>
   )
 }
 
-function ProductFormModal({ product, onClose, onSaved }) {
+function ProductFormModal({ product, rates, onClose, onSaved }) {
   const isEdit = !!product
   const [form, setForm] = useState({
     name: product?.name || '',
     sku: product?.sku || '',
     description: product?.description || '',
     unit: product?.unit || 'unidad',
-    cost: product?.cost ?? '',
+    currency: product?.currency || 'CLP',
+    cost_amount: product?.cost_amount ?? '',
+    incoterm: product?.incoterm || 'DDP',
+    import_multiplier: product?.import_multiplier ?? '1',
     unit_price: product?.unit_price ?? '',
     supplier: product?.supplier || '',
     lead_time_days: product?.lead_time_days ?? '',
@@ -152,8 +214,12 @@ function ProductFormModal({ product, onClose, onSaved }) {
 
   const handleChange = (field, value) => setForm((prev) => ({ ...prev, [field]: value }))
 
-  const cost = Number(form.cost) || 0
+  // Mirror the server's conversion so the peso cost is visible while typing.
+  const rate = form.currency === 'CLP' ? 1 : Number(rates?.[form.currency.toLowerCase()]) || 0
+  const multiplier = form.incoterm === 'DDP' ? 1 : Number(form.import_multiplier) || 1
+  const cost = (Number(form.cost_amount) || 0) * rate * multiplier
   const liveMargin = cost ? (Number(form.unit_price) || 0) / cost - 1 : null
+  const missingRate = form.currency !== 'CLP' && !rate
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -166,7 +232,8 @@ function ProductFormModal({ product, onClose, onSaved }) {
     try {
       const payload = {
         ...form,
-        cost: form.cost || 0,
+        cost_amount: form.cost_amount || 0,
+        import_multiplier: form.import_multiplier || 1,
         unit_price: form.unit_price || 0,
         lead_time_days: form.lead_time_days === '' ? null : Number(form.lead_time_days),
       }
@@ -179,7 +246,8 @@ function ProductFormModal({ product, onClose, onSaved }) {
       onClose()
     } catch (err) {
       const data = err.response?.data
-      setError(data?.sku?.[0] || data?.cost?.[0] || data?.unit_price?.[0]
+      setError(data?.sku?.[0] || data?.currency?.[0] || data?.cost_amount?.[0]
+        || data?.import_multiplier?.[0] || data?.unit_price?.[0]
         || 'Error al guardar el producto')
       setSaving(false)
     }
@@ -208,20 +276,58 @@ function ProductFormModal({ product, onClose, onSaved }) {
 
         <div className="form-row">
           <div className="modal-field">
-            <label>Costo (CLP)</label>
-            <input type="number" min="0" step="any" value={form.cost} onChange={(e) => handleChange('cost', e.target.value)} placeholder="0" />
+            <label>Moneda</label>
+            <select value={form.currency} onChange={(e) => handleChange('currency', e.target.value)}>
+              {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div className="modal-field">
-            <label>Precio unitario</label>
+            <label>Costo del proveedor</label>
+            <input type="number" min="0" step="any" value={form.cost_amount} onChange={(e) => handleChange('cost_amount', e.target.value)} placeholder="0" />
+          </div>
+          <div className="modal-field">
+            <label>Precio de venta (CLP)</label>
             <input type="number" min="0" step="any" value={form.unit_price} onChange={(e) => handleChange('unit_price', e.target.value)} placeholder="0" />
           </div>
         </div>
 
+        {form.currency !== 'CLP' && (
+          <div className="form-row">
+            <div className="modal-field">
+              <label>Incoterm</label>
+              <select value={form.incoterm} onChange={(e) => handleChange('incoterm', e.target.value)}>
+                {INCOTERMS.map((i) => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </div>
+            <div className="modal-field">
+              <label>Multiplicador importación</label>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                disabled={form.incoterm === 'DDP'}
+                value={form.import_multiplier}
+                onChange={(e) => handleChange('import_multiplier', e.target.value)}
+                placeholder="1"
+              />
+              {form.incoterm === 'DDP' && (
+                <span className="field-hint">DDP ya incluye flete y aranceles</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {missingRate && (
+          <div className="form-error">
+            No hay un valor de {form.currency} cargado. Registra el tipo de cambio antes de costear en esta moneda.
+          </div>
+        )}
+
         <div className="product-margin-preview">
-          <span>Margen sobre costo</span>
-          <strong>{formatMargin(liveMargin)}</strong>
+          <span>Costo en pesos</span>
+          <strong className="cost-preview">{formatMoney(cost)}</strong>
           <span className="product-margin-profit">
-            Utilidad {formatMoney((Number(form.unit_price) || 0) - (Number(form.cost) || 0))}
+            Margen {formatMargin(liveMargin)} · utilidad {formatMoney((Number(form.unit_price) || 0) - cost)}
           </span>
         </div>
 

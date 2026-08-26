@@ -225,3 +225,132 @@
   color: var(--text-muted);
   line-height: 1.6;
 }
+
+/* Exchange rates chip + stale-cost banner */
+.products-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rates-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--content-bg-hover);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rates-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.stale-costs-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: #fff8ec;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.stale-costs-banner svg:first-child {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.stale-costs-banner .btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* Supplier currency under the peso figure */
+.pt-col-money.cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.pt-origin {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.pt-origin.stale {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+.cost-preview {
+  color: var(--text-primary) !important;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+/* Rate history inside the rates modal */
+.rates-history {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.rates-history-head,
+.rates-history-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 1fr 1fr 110px;
+  gap: 8px;
+  padding: 6px 11px;
+}
+
+.rates-history-head {
+  background: var(--content-bg-hover);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.rates-history-row {
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.rates-history-row:last-child {
+  border-bottom: none;
+}
+
+.rates-history-row:first-of-type {
+  background: rgba(69, 115, 210, 0.05);
+  font-weight: 500;
+}
+
+.rates-author {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

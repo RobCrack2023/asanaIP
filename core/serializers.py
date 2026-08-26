@@ -1,9 +1,12 @@
+from decimal import Decimal
+
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, QuoteItem, Product,
-    ProductPriceEntry,
+    ProductPriceEntry, ExchangeRate, Currency,
 )
 
 
@@ -205,6 +208,36 @@ class ClientSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class ExchangeRateSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.CharField(source='updated_by.get_full_name',
+                                            read_only=True, default=None)
+
+    class Meta:
+        model = ExchangeRate
+        fields = ['id', 'date', 'uf', 'usd', 'eur', 'updated_by', 'updated_by_name', 'created_at']
+        read_only_fields = ['id', 'updated_by', 'created_at']
+
+    def validate(self, attrs):
+        for field in ('uf', 'usd', 'eur'):
+            value = attrs.get(field, getattr(self.instance, field, None))
+            if value is not None and value < 0:
+                raise serializers.ValidationError({field: 'El valor no puede ser negativo.'})
+        return attrs
+
+    def create(self, validated_data):
+        """Recording rates for a day that already has them overwrites it.
+
+        There is one true set of rates per day, and correcting a typo is the
+        common case — the unique constraint would otherwise surface as a 500.
+        """
+        organization = validated_data.pop('organization')
+        date = validated_data.pop('date', timezone.localdate())
+        rates, _ = ExchangeRate.objects.update_or_create(
+            organization=organization, date=date, defaults=validated_data,
+        )
+        return rates
+
+
 class ProductPriceEntrySerializer(serializers.ModelSerializer):
     recorded_by_name = serializers.CharField(source='recorded_by.get_full_name',
                                              read_only=True, default=None)
@@ -212,31 +245,66 @@ class ProductPriceEntrySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductPriceEntry
-        fields = ['id', 'cost', 'unit_price', 'margin', 'supplier', 'note',
-                  'recorded_by', 'recorded_by_name', 'recorded_at']
+        fields = ['id', 'cost', 'cost_amount', 'currency', 'cost_rate', 'unit_price',
+                  'margin', 'supplier', 'note', 'recorded_by', 'recorded_by_name', 'recorded_at']
         read_only_fields = fields
 
 
 class ProductSerializer(serializers.ModelSerializer):
     margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
     unit_profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    cost_is_stale = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'description', 'unit', 'cost', 'unit_price',
+        fields = ['id', 'name', 'sku', 'description', 'unit',
+                  'currency', 'cost_amount', 'import_multiplier', 'incoterm',
+                  'cost_rate', 'cost', 'cost_is_stale', 'unit_price',
                   'margin', 'unit_profit', 'supplier', 'lead_time_days', 'is_active',
                   'created_at', 'updated_at']
-        read_only_fields = ['id', 'margin', 'unit_profit', 'created_at', 'updated_at']
+        # cost and cost_rate are derived from cost_amount, currency and the
+        # rate in force; sending them directly would let the two disagree.
+        read_only_fields = ['id', 'cost', 'cost_rate', 'cost_is_stale', 'margin',
+                            'unit_profit', 'created_at', 'updated_at']
+
+    def get_cost_is_stale(self, obj):
+        return obj.cost_is_stale(self._rates())
+
+    def _rates(self):
+        organization = getattr(self._user(), 'organization', None)
+        if organization is None:
+            return None
+        # Cached per serializer instance so a product list does not run one
+        # query per row.
+        if not hasattr(self, '_cached_rates'):
+            self._cached_rates = ExchangeRate.current_for(organization)
+        return self._cached_rates
 
     def validate_unit_price(self, value):
         if value < 0:
             raise serializers.ValidationError('El precio no puede ser negativo.')
         return value
 
-    def validate_cost(self, value):
+    def validate_cost_amount(self, value):
         if value < 0:
             raise serializers.ValidationError('El costo no puede ser negativo.')
         return value
+
+    def validate_import_multiplier(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('El multiplicador de importación debe ser mayor que cero.')
+        return value
+
+    def validate(self, attrs):
+        currency = attrs.get('currency', getattr(self.instance, 'currency', Currency.CLP))
+        if currency != Currency.CLP:
+            rates = self._rates()
+            if rates is None or not rates.rate_for(currency):
+                raise serializers.ValidationError({
+                    'currency': f'No hay un valor de {currency} cargado. '
+                                'Registra el tipo de cambio antes de costear en esta moneda.'
+                })
+        return attrs
 
     def validate_sku(self, value):
         sku = (value or '').strip()
@@ -254,14 +322,22 @@ class ProductSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return getattr(request, 'user', None) if request else None
 
+    def _apply_current_rate(self, product):
+        rates = self._rates()
+        rate = rates.rate_for(product.currency) if rates else Decimal('1')
+        product.apply_rate(rate if product.currency != Currency.CLP else Decimal('1'))
+        product.save(update_fields=['cost', 'cost_rate'])
+
     def create(self, validated_data):
         product = super().create(validated_data)
+        self._apply_current_rate(product)
         product.record_price(user=self._user(), note='Alta en el catálogo.')
         return product
 
     def update(self, instance, validated_data):
         before = {field: getattr(instance, field) for field in Product.PRICED_FIELDS}
         product = super().update(instance, validated_data)
+        self._apply_current_rate(product)
         # Renaming a product or flipping is_active is not a price change.
         if any(getattr(product, field) != before[field] for field in Product.PRICED_FIELDS):
             product.record_price(user=self._user())
@@ -316,17 +392,21 @@ class QuoteSerializer(serializers.ModelSerializer):
     is_expired = serializers.BooleanField(read_only=True)
     total_profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
+    display_rate = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = Quote
         fields = ['id', 'opportunity', 'number', 'reference', 'status', 'status_display',
                   'issue_date', 'valid_until', 'is_expired', 'tax_rate', 'items',
                   'subtotal', 'total_cost', 'total_profit', 'margin',
-                  'tax_amount', 'total_amount', 'notes', 'created_at', 'updated_at']
+                  'tax_amount', 'total_amount', 'display_currency', 'display_rate',
+                  'rate_uf', 'rate_usd', 'rate_eur', 'notes', 'created_at', 'updated_at']
         # Every money figure is derived from the items; the client sends the
-        # breakdown and the rate, never the sums.
+        # breakdown and the rate, never the sums. The exchange rates are
+        # stamped from the company's table at issue time.
         read_only_fields = ['id', 'number', 'subtotal', 'total_cost', 'total_profit', 'margin',
-                            'tax_amount', 'total_amount', 'created_at', 'updated_at']
+                            'tax_amount', 'total_amount', 'display_rate',
+                            'rate_uf', 'rate_usd', 'rate_eur', 'created_at', 'updated_at']
 
     def validate_tax_rate(self, value):
         if not 0 <= value <= 100:
@@ -352,9 +432,9 @@ class QuoteSerializer(serializers.ModelSerializer):
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
-        quote = Quote(
-            organization=validated_data['opportunity'].organization, **validated_data
-        )
+        organization = validated_data['opportunity'].organization
+        quote = Quote(organization=organization, **validated_data)
+        quote.stamp_rates(ExchangeRate.current_for(organization))
         quote.assign_number()
         quote.save()
         self._write_items(quote, items_data)

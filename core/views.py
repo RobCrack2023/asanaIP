@@ -11,6 +11,7 @@ from rest_framework.permissions import BasePermission
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, Product, ProductPriceEntry,
+    ExchangeRate, Currency,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
@@ -18,6 +19,7 @@ from .serializers import (
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
     ClientSerializer, OpportunitySerializer, OpportunityActivitySerializer,
     QuoteSerializer, ProductSerializer, ProductPriceEntrySerializer,
+    ExchangeRateSerializer,
 )
 from . import emails
 from . import notifications as notif
@@ -711,6 +713,39 @@ class ProductViewSet(viewsets.ModelViewSet):
         entries = self.get_object().price_history.select_related('recorded_by')
         return Response(ProductPriceEntrySerializer(entries, many=True).data)
 
+    @action(detail=False, methods=['post'])
+    def refresh_costs(self, request):
+        """Restate every imported cost at today's rate.
+
+        Deliberately explicit rather than automatic: recomputing the catalog
+        on every rate move would rewrite costs under quotes being drafted and
+        fill the price history with noise nobody asked for.
+        """
+        rates = ExchangeRate.current_for(request.user.organization)
+        if rates is None:
+            return Response(
+                {'error': 'No hay tipos de cambio registrados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated = []
+        for product in self.get_queryset().exclude(currency=Currency.CLP):
+            rate = rates.rate_for(product.currency)
+            if not rate or rate == product.cost_rate:
+                continue
+            product.apply_rate(rate)
+            product.save(update_fields=['cost', 'cost_rate'])
+            product.record_price(
+                user=request.user,
+                note=f'Costo recalculado con {product.currency} = {rate}.',
+            )
+            updated.append(product)
+
+        return Response({
+            'updated': len(updated),
+            'products': ProductSerializer(updated, many=True, context={'request': request}).data,
+        })
+
 
 class OpportunityActivityViewSet(viewsets.ModelViewSet):
     queryset = OpportunityActivity.objects.select_related('author', 'opportunity').all()
@@ -734,6 +769,29 @@ class OpportunityActivityViewSet(viewsets.ModelViewSet):
         if instance.is_system:
             raise ValidationError('Los eventos del sistema no se pueden eliminar.')
         instance.delete()
+
+
+class ExchangeRateViewSet(viewsets.ModelViewSet):
+    queryset = ExchangeRate.objects.select_related('updated_by').all()
+    serializer_class = ExchangeRateSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        return super().get_queryset().filter(organization=self.request.user.organization)
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization,
+                        updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def current(self, request):
+        rates = ExchangeRate.current_for(request.user.organization)
+        if rates is None:
+            return Response(None)
+        return Response(self.get_serializer(rates).data)
 
 
 class QuoteViewSet(viewsets.ModelViewSet):

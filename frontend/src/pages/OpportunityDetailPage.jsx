@@ -436,6 +436,13 @@ function QuoteCard({ quote, onDelete }) {
   const items = quote.items || []
   const [expanded, setExpanded] = useState(false)
 
+  const currency = quote.display_currency || 'CLP'
+  const rate = Number(quote.display_rate) || 1
+  const show = (amount) =>
+    currency === 'CLP'
+      ? formatMoney(amount)
+      : `${currency} ${(Number(amount || 0) / rate).toLocaleString('es-CL', { maximumFractionDigits: 2 })}`
+
   const formatDate = (value) =>
     value ? new Date(`${value}T00:00:00`).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
 
@@ -450,7 +457,7 @@ function QuoteCard({ quote, onDelete }) {
         )}
         <span className="opp-quote-number">N° {quote.number}</span>
         <span className={`quote-status-badge ${quote.status}`}>{QUOTE_STATUS_LABELS[quote.status]}</span>
-        <span className="opp-quote-amount">{formatMoney(quote.total_amount)}</span>
+        <span className="opp-quote-amount">{show(quote.total_amount)}</span>
         {items.length > 0 && (
           <span className="opp-quote-count">{items.length} {items.length === 1 ? 'ítem' : 'ítems'}</span>
         )}
@@ -480,32 +487,33 @@ function QuoteCard({ quote, onDelete }) {
             <div key={item.id} className="quote-detail-row">
               <span>{item.description}</span>
               <span>{Number(item.quantity)}</span>
-              <span className="qd-cost">{formatMoney(item.unit_cost)}</span>
-              <span>{formatMoney(item.unit_price)}</span>
+              <span className="qd-cost">{show(item.unit_cost)}</span>
+              <span>{show(item.unit_price)}</span>
               <span>{Number(item.discount_percent) ? `${Number(item.discount_percent)}%` : '—'}</span>
-              <span>{formatMoney(item.subtotal)}</span>
+              <span>{show(item.subtotal)}</span>
             </div>
           ))}
           <div className="quote-detail-totals">
             <div className="quote-total-line muted">
-              <span>Costo</span><span>{formatMoney(quote.total_cost)}</span>
+              <span>Costo</span><span>{show(quote.total_cost)}</span>
             </div>
             <div className="quote-total-line profit">
               <span>Utilidad · margen {formatMargin(quote.margin)}</span>
-              <span>{formatMoney(quote.total_profit)}</span>
+              <span>{show(quote.total_profit)}</span>
             </div>
             <div className="quote-total-line">
-              <span>Neto</span><span>{formatMoney(quote.subtotal)}</span>
+              <span>Neto</span><span>{show(quote.subtotal)}</span>
             </div>
             <div className="quote-total-line">
-              <span>IVA {Number(quote.tax_rate)}%</span><span>{formatMoney(quote.tax_amount)}</span>
+              <span>IVA {Number(quote.tax_rate)}%</span><span>{show(quote.tax_amount)}</span>
             </div>
             <div className="quote-total-line grand">
-              <span>Total</span><strong>{formatMoney(quote.total_amount)}</strong>
+              <span>Total</span><strong>{show(quote.total_amount)}</strong>
             </div>
           </div>
           <div className="quote-detail-validity">
             Válida hasta: {formatDate(quote.valid_until)}
+            {currency !== 'CLP' && ` · convertido a ${currency} a ${formatMoney(rate)}`}
           </div>
         </div>
       )}
@@ -532,6 +540,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
   const [items, setItems] = useState([emptyItem()])
   const [notes, setNotes] = useState('')
   const [taxRate, setTaxRate] = useState('19')
+  const [displayCurrency, setDisplayCurrency] = useState('CLP')
   const [issueDate, setIssueDate] = useState(today())
   const [validUntil, setValidUntil] = useState('')
   const [saving, setSaving] = useState(false)
@@ -591,6 +600,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
         status,
         notes,
         tax_rate: Number(taxRate) || 0,
+        display_currency: displayCurrency,
         issue_date: issueDate,
         valid_until: validUntil || null,
         items: filled.map((item) => ({
@@ -754,6 +764,12 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
             <label>Estado</label>
             <select value={status} onChange={(e) => setStatus(e.target.value)}>
               {Object.entries(QUOTE_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <div className="modal-field">
+            <label>Mostrar en</label>
+            <select value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}>
+              {['CLP', 'USD', 'EUR', 'UF'].map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>

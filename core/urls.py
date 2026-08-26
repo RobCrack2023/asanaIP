@@ -18,6 +18,7 @@ router.register(r'opportunities', views.OpportunityViewSet)
 router.register(r'opportunity-activities', views.OpportunityActivityViewSet)
 router.register(r'quotes', views.QuoteViewSet)
 router.register(r'products', views.ProductViewSet)
+router.register(r'exchange-rates', views.ExchangeRateViewSet)
 
 urlpatterns = [
     path('auth/login/', views.login_view, name='login'),

@@ -325,12 +325,70 @@ class Client(models.Model):
         return self.name
 
 
+class Currency(models.TextChoices):
+    CLP = 'CLP', 'Peso chileno'
+    USD = 'USD', 'Dólar'
+    EUR = 'EUR', 'Euro'
+    UF = 'UF', 'UF'
+
+
+class Incoterm(models.TextChoices):
+    DDP = 'DDP', 'DDP — entregado con derechos pagados'
+    DAP = 'DAP', 'DAP — entregado en destino'
+    CIF = 'CIF', 'CIF — costo, seguro y flete'
+    FOB = 'FOB', 'FOB — libre a bordo'
+    EXW = 'EXW', 'EXW — en fábrica'
+
+
+class ExchangeRate(models.Model):
+    """The UF, dollar and euro as of a given day, per company.
+
+    The evaluación sheets keep these in three cells the team retypes from the
+    Banco Central; here they are dated rows, so a cost converted last March
+    can still be explained with the rate that was in force then.
+    """
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                                     related_name='exchange_rates')
+    date = models.DateField(default=timezone.localdate)
+    uf = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    usd = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    eur = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'date'],
+                                    name='unique_exchange_rate_per_day'),
+        ]
+
+    def __str__(self):
+        return f'{self.date}: UF {self.uf} · USD {self.usd} · EUR {self.eur}'
+
+    @classmethod
+    def current_for(cls, organization):
+        return cls.objects.filter(organization=organization).first()
+
+    def rate_for(self, currency):
+        """How many pesos one unit of `currency` is worth."""
+        if currency == Currency.CLP:
+            return Decimal('1')
+        return getattr(self, currency.lower(), Decimal('0')) or Decimal('0')
+
+
 class Product(models.Model):
     """Shared master catalog of products and services quoted to clients.
 
     Carries both sides of the deal: what the item costs landed (`cost`) and
     what it is sold for (`unit_price`). Every change to either is kept in
     price_history, so a price can always be explained months later.
+
+    An imported item is priced in its supplier's currency; `cost` is the
+    landed CLP figure derived from it, and `cost_rate` remembers the rate
+    that produced it so a stale conversion can be spotted.
     """
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='products')
@@ -338,6 +396,15 @@ class Product(models.Model):
     sku = models.CharField(max_length=50, blank=True)
     description = models.TextField(blank=True)
     unit = models.CharField(max_length=20, blank=True, default='unidad')
+    #: What the supplier charges, in their own currency.
+    currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.CLP)
+    cost_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Freight, duties and handling on top of the supplier's price. Only
+    #: applied when the supplier is not delivering duty paid — see landed_cost.
+    import_multiplier = models.DecimalField(max_digits=6, decimal_places=4, default=1)
+    incoterm = models.CharField(max_length=10, choices=Incoterm.choices, default=Incoterm.DDP)
+    #: Rate that produced `cost`; 1 for anything priced in pesos.
+    cost_rate = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     #: Landed cost in CLP — the DDP figure, import charges already included.
     cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -377,10 +444,43 @@ class Product(models.Model):
     def unit_profit(self):
         return self.unit_price - self.cost
 
+    def landed_cost(self, rate):
+        """Supplier price in pesos, import charges added only when we bear them.
+
+        Under DDP the supplier delivers duty paid, so freight and duties are
+        already inside their price and the multiplier must not be applied —
+        this is what the Cálculo sheet's IF(Incoterm="DDP", ...) encodes.
+        Applying it regardless would overstate every DDP cost.
+        """
+        converted = self.cost_amount * Decimal(rate)
+        if self.incoterm == Incoterm.DDP:
+            return converted.quantize(Decimal('0.01'))
+        return (converted * self.import_multiplier).quantize(Decimal('0.01'))
+
+    def apply_rate(self, rate):
+        """Restate the landed cost at `rate` and remember the rate used."""
+        self.cost_rate = Decimal(rate)
+        self.cost = self.landed_cost(rate)
+        return self.cost
+
+    def cost_is_stale(self, rates):
+        """True when today's rate would produce a different landed cost.
+
+        Rates are not applied automatically: silently rewriting the catalog
+        every time the dollar moves would make the price history meaningless
+        and change quotes in progress. The flag lets the UI offer the update.
+        """
+        if self.currency == Currency.CLP or rates is None:
+            return False
+        return rates.rate_for(self.currency) != self.cost_rate
+
     def record_price(self, user=None, note=''):
         return ProductPriceEntry.objects.create(
             product=self,
             cost=self.cost,
+            cost_amount=self.cost_amount,
+            currency=self.currency,
+            cost_rate=self.cost_rate,
             unit_price=self.unit_price,
             supplier=self.supplier,
             note=note,
@@ -397,6 +497,11 @@ class ProductPriceEntry(models.Model):
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='price_history')
     cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: What the supplier charged and at what rate, so a jump in the landed
+    #: cost can be told apart from a jump in the exchange rate.
+    cost_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.CLP)
+    cost_rate = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     supplier = models.CharField(max_length=200, blank=True)
     note = models.CharField(max_length=255, blank=True)
@@ -523,6 +628,14 @@ class Quote(models.Model):
     issue_date = models.DateField(default=timezone.localdate)
     valid_until = models.DateField(null=True, blank=True)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=DEFAULT_TAX_RATE)
+    #: Rates in force when the quote was issued. Stamped for the same reason
+    #: as tax_rate: the document must still read the same a year from now.
+    rate_uf = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    rate_usd = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    rate_eur = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Currency the figures are shown in; amounts are always stored in CLP.
+    display_currency = models.CharField(max_length=3, choices=Currency.choices,
+                                        default=Currency.CLP)
     # Derived from the items by recalculate(); never written by the client.
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -591,6 +704,20 @@ class Quote(models.Model):
     @property
     def margin(self):
         return markup(self.subtotal, self.total_cost)
+
+    @property
+    def display_rate(self):
+        """Divisor for showing the CLP figures in display_currency."""
+        if self.display_currency == Currency.CLP:
+            return Decimal('1')
+        rate = getattr(self, f'rate_{self.display_currency.lower()}', Decimal('0'))
+        # An unset rate would blank out every figure on the document.
+        return rate or Decimal('1')
+
+    def stamp_rates(self, rates):
+        if rates is None:
+            return
+        self.rate_uf, self.rate_usd, self.rate_eur = rates.uf, rates.usd, rates.eur
 
 
 class QuoteItem(models.Model):
