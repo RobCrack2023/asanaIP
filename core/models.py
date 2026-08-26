@@ -407,6 +407,11 @@ class Product(models.Model):
     cost_rate = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     #: Landed cost in CLP — the DDP figure, import charges already included.
     cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Markup applied to the cost to reach the price, as a fraction: 0.30 is
+    #: a 30% markup. Quotes start from this and may override it per deal.
+    default_margin = models.DecimalField(max_digits=8, decimal_places=4, default=0)
+    #: Derived from cost and default_margin; kept stored so the catalog can be
+    #: listed and searched by price without recomputing every row.
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     supplier = models.CharField(max_length=200, blank=True)
     lead_time_days = models.PositiveIntegerField(null=True, blank=True)
@@ -438,7 +443,12 @@ class Product(models.Model):
         deliberately not gross margin over the sale price — the two produce
         very different numbers and the team reads this one.
         """
-        return markup(self.unit_price, self.cost)
+        return self.default_margin if self.cost else None
+
+    def apply_margin(self):
+        """Restate the price from the cost and the default margin."""
+        self.unit_price = (self.cost * (Decimal('1') + self.default_margin)).quantize(Decimal('0.01'))
+        return self.unit_price
 
     @property
     def unit_profit(self):
@@ -458,9 +468,10 @@ class Product(models.Model):
         return (converted * self.import_multiplier).quantize(Decimal('0.01'))
 
     def apply_rate(self, rate):
-        """Restate the landed cost at `rate` and remember the rate used."""
+        """Restate the landed cost at `rate`, and the price that follows it."""
         self.cost_rate = Decimal(rate)
         self.cost = self.landed_cost(rate)
+        self.apply_margin()
         return self.cost
 
     def cost_is_stale(self, rates):
@@ -736,6 +747,9 @@ class QuoteItem(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     #: Landed cost per unit at the time of quoting, copied from the catalog.
     unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Markup for this line, seeded from the product and adjustable per deal.
+    #: Null on lines with no cost, where the price is simply stated.
+    margin = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     order = models.PositiveIntegerField(default=0)
@@ -761,9 +775,15 @@ class QuoteItem(models.Model):
         return self.subtotal - self.cost_subtotal
 
     @property
-    def margin(self):
-        """Markup actually achieved on this line, discount included."""
+    def effective_margin(self):
+        """Markup actually achieved once the discount is taken off."""
         return markup(self.subtotal, self.cost_subtotal)
+
+    def apply_margin(self):
+        """Price the line from its cost and margin, when there is a cost."""
+        if self.unit_cost and self.margin is not None:
+            self.unit_price = (self.unit_cost * (Decimal('1') + self.margin)).quantize(Decimal('0.01'))
+        return self.unit_price
 
 
 class OpportunityActivity(models.Model):

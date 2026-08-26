@@ -479,6 +479,7 @@ function QuoteCard({ quote, onDelete }) {
             <span>Descripción</span>
             <span>Cant.</span>
             <span>Costo unit.</span>
+            <span>Margen</span>
             <span>Precio unit.</span>
             <span>Desc. %</span>
             <span>Subtotal</span>
@@ -488,6 +489,7 @@ function QuoteCard({ quote, onDelete }) {
               <span>{item.description}</span>
               <span>{Number(item.quantity)}</span>
               <span className="qd-cost">{show(item.unit_cost)}</span>
+              <span className="qd-cost">{formatMargin(item.margin)}</span>
               <span>{show(item.unit_price)}</span>
               <span>{Number(item.discount_percent) ? `${Number(item.discount_percent)}%` : '—'}</span>
               <span>{show(item.subtotal)}</span>
@@ -521,7 +523,15 @@ function QuoteCard({ quote, onDelete }) {
   )
 }
 
-const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_cost: '', unit_price: '', discount_percent: '' })
+const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_cost: '', margin: '', unit_price: '', discount_percent: '' })
+
+// Margin drives the price on any line that has a cost; a line without one
+// (a service, a pass-through) simply states its price.
+const itemPrice = (item) => {
+  const cost = Number(item.unit_cost) || 0
+  if (!cost) return Number(item.unit_price) || 0
+  return cost * (1 + (Number(item.margin) || 0) / 100)
+}
 
 const itemCost = (item) => (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)
 
@@ -529,7 +539,7 @@ const itemCost = (item) => (Number(item.quantity) || 0) * (Number(item.unit_cost
 const formatMargin = (margin) => (margin == null ? '—' : `${(Number(margin) * 100).toFixed(0)}%`)
 
 const itemSubtotal = (item) => {
-  const gross = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
+  const gross = (Number(item.quantity) || 0) * itemPrice(item)
   return gross - gross * (Number(item.discount_percent) || 0) / 100
 }
 
@@ -570,6 +580,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
       unit: product.unit || 'unidad',
       quantity: '1',
       unit_cost: String(product.cost ?? ''),
+      margin: String(Number(product.default_margin ?? 0) * 100),
       unit_price: String(product.unit_price ?? ''),
       discount_percent: '',
     }
@@ -609,15 +620,21 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
           unit: item.unit || 'unidad',
           quantity: Number(item.quantity),
           unit_cost: Number(item.unit_cost) || 0,
-          unit_price: Number(item.unit_price) || 0,
+          // Costed lines send the margin and let the server price them;
+          // uncosted ones send the price they were given.
+          margin: Number(item.unit_cost) ? (Number(item.margin) || 0) / 100 : null,
+          unit_price: Number(item.unit_cost) ? undefined : Number(item.unit_price) || 0,
           discount_percent: Number(item.discount_percent) || 0,
         })),
       })
       onClose()
     } catch (err) {
       const data = err.response?.data
+      const itemError = Array.isArray(data?.items)
+        ? Object.values(data.items.find((i) => i && Object.keys(i).length) || {})[0]?.[0]
+        : data?.items?.[0]
       setError(
-        data?.valid_until?.[0] || data?.items?.[0] || data?.tax_rate?.[0]
+        data?.valid_until?.[0] || itemError || data?.tax_rate?.[0]
         || 'Error al crear la cotización'
       )
       setSaving(false)
@@ -636,6 +653,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
               <span>Descripción</span>
               <span>Cant.</span>
               <span>Costo unit.</span>
+              <span>Margen %</span>
               <span>Precio unit.</span>
               <span>Desc. %</span>
               <span>Subtotal</span>
@@ -667,12 +685,24 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
                 />
                 <input
                   type="number"
-                  min="0"
                   step="any"
-                  value={item.unit_price}
-                  onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                  disabled={!Number(item.unit_cost)}
+                  value={item.margin}
+                  onChange={(e) => updateItem(index, 'margin', e.target.value)}
                   placeholder="0"
                 />
+                {Number(item.unit_cost) ? (
+                  <span className="quote-item-derived">{formatMoney(itemPrice(item))}</span>
+                ) : (
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={item.unit_price}
+                    onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                    placeholder="0"
+                  />
+                )}
                 <input
                   type="number"
                   min="0"

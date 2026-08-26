@@ -315,17 +315,31 @@ class ProductCostHistoryTests(APITestCase):
 
     def _create(self, **extra):
         payload = {'name': 'Cerco perimetral 5x5', 'cost_amount': '900000',
-                   'unit_price': '2520000', 'supplier': 'Prodalam'}
+                   'default_margin': '1.8', 'supplier': 'Prodalam'}
         payload.update(extra)
         return self.client.post('/api/products/', payload, format='json')
 
-    def test_margin_is_markup_over_cost(self):
-        """900.000 sold at 2.520.000 is a margin of 1.8, as the evaluación states it."""
+    def test_the_price_follows_from_the_cost_and_the_margin(self):
+        """900.000 at a margin of 1.8 prices at 2.520.000, as the sheet does."""
         response = self._create()
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(str(response.data['unit_price']), '2520000.00')
         self.assertEqual(str(response.data['margin']), '1.8000')
         self.assertEqual(str(response.data['unit_profit']), '1620000.00')
+
+    def test_a_price_sent_by_the_client_is_ignored(self):
+        response = self._create(unit_price='1')
+
+        self.assertEqual(str(response.data['unit_price']), '2520000.00')
+
+    def test_changing_the_margin_restates_the_price(self):
+        created = self._create()
+
+        updated = self.client.patch(f"/api/products/{created.data['id']}/",
+                                    {'default_margin': '1.0'}, format='json')
+
+        self.assertEqual(str(updated.data['unit_price']), '1800000.00')
 
     def test_margin_is_null_without_a_cost(self):
         response = self._create(cost_amount='0')
@@ -400,9 +414,9 @@ class QuoteProfitTests(APITestCase):
         """Two lines lifted from the AES evaluación: cerco 5x5 and torre de 3 metros."""
         response = self._post_quote([
             {'description': 'Cerco perimetral 5x5', 'quantity': 2,
-             'unit_cost': '900000', 'unit_price': '2520000'},
+             'unit_cost': '900000', 'margin': '1.8'},
             {'description': 'Torre 3 metros', 'quantity': 2,
-             'unit_cost': '400000', 'unit_price': '800000'},
+             'unit_cost': '400000', 'margin': '1.0'},
         ])
 
         self.assertEqual(response.status_code, 201)
@@ -413,11 +427,11 @@ class QuoteProfitTests(APITestCase):
 
     def test_a_discount_eats_into_the_margin(self):
         full = self._post_quote([
-            {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000', 'unit_price': '2520000'},
+            {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000', 'margin': '1.8'},
         ])
         discounted = self._post_quote([
             {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000',
-             'unit_price': '2520000', 'discount_percent': '20'},
+             'margin': '1.8', 'discount_percent': '20'},
         ])
 
         self.assertEqual(str(full.data['margin']), '1.8000')
@@ -435,7 +449,7 @@ class QuoteProfitTests(APITestCase):
     def test_profit_ignores_tax(self):
         """VAT is collected for the state, so it must not inflate the profit."""
         response = self._post_quote([
-            {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000', 'unit_price': '2520000'},
+            {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000', 'margin': '1.8'},
         ], tax_rate='19')
 
         self.assertEqual(str(response.data['tax_amount']), '478800.00')
@@ -445,11 +459,11 @@ class QuoteProfitTests(APITestCase):
     def test_editing_the_catalog_does_not_restate_a_quoted_cost(self):
         product = Product.objects.create(
             organization=self.org, name='Cerco', cost_amount=900000, cost=900000,
-            unit_price=2520000,
+            default_margin=Decimal('1.8'), unit_price=2520000,
         )
         self._post_quote([{
             'product': product.id, 'description': 'Cerco', 'quantity': 1,
-            'unit_cost': '900000', 'unit_price': '2520000',
+            'unit_cost': '900000', 'margin': '1.8',
         }])
 
         product.cost = 990000
@@ -475,7 +489,7 @@ class ExchangeRateTests(APITestCase):
         }, format='json')
 
     def _create_product(self, **extra):
-        payload = {'name': 'Datalogger CR1000X', 'unit_price': '3479612.5'}
+        payload = {'name': 'Datalogger CR1000X', 'default_margin': '0.3'}
         payload.update(extra)
         return self.client.post('/api/products/', payload, format='json')
 
@@ -614,7 +628,7 @@ class QuoteCurrencyTests(APITestCase):
         return self.client.post('/api/quotes/', {
             'opportunity': self.opportunity.id,
             'items': [{'description': 'Cerco', 'quantity': 1,
-                       'unit_cost': '900000', 'unit_price': '2520000'}],
+                       'unit_cost': '900000', 'margin': '1.8'}],
             **extra,
         }, format='json')
 
@@ -656,3 +670,71 @@ class QuoteCurrencyTests(APITestCase):
         response = self._quote(display_currency='USD')
 
         self.assertEqual(str(response.data['display_rate']), '1.00')
+
+
+class QuoteLinePricingTests(APITestCase):
+    """Margin prices the line; the catalog only supplies the starting point."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        User.objects.create_user(username='vendedor', password='secret',
+                                 organization=self.org, is_sales=True)
+        client_record = Client.objects.create(organization=self.org, name='AES')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client_record, name='Estación',
+        )
+        self.client.login(username='vendedor', password='secret')
+
+    def _post(self, items):
+        return self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id, 'items': items,
+        }, format='json')
+
+    def test_the_line_margin_can_differ_from_the_catalog(self):
+        """A tight deal is quoted at a lower margin without touching the catalog."""
+        product = Product.objects.create(
+            organization=self.org, name='Cerco', cost_amount=900000, cost=900000,
+            default_margin=Decimal('1.8'), unit_price=2520000,
+        )
+
+        response = self._post([{
+            'product': product.id, 'description': 'Cerco', 'quantity': 1,
+            'unit_cost': '900000', 'margin': '1.2',
+        }])
+
+        self.assertEqual(str(response.data['items'][0]['unit_price']), '1980000.00')
+        product.refresh_from_db()
+        self.assertEqual(product.default_margin, Decimal('1.8'))
+
+    def test_a_line_without_cost_states_its_price(self):
+        """Not everything quoted is bought — a service can just have a price."""
+        response = self._post([
+            {'description': 'Asesoría en terreno', 'quantity': 1, 'unit_price': '450000'},
+        ])
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(str(response.data['items'][0]['unit_price']), '450000.00')
+        self.assertIsNone(response.data['items'][0]['effective_margin'])
+
+    def test_a_costed_line_must_say_its_margin(self):
+        response = self._post([
+            {'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000'},
+        ])
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_a_line_with_neither_cost_nor_price_is_refused(self):
+        response = self._post([{'description': 'Vacío', 'quantity': 1}])
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_effective_margin_reports_what_the_discount_left(self):
+        response = self._post([{
+            'description': 'Cerco', 'quantity': 1, 'unit_cost': '900000',
+            'margin': '1.8', 'discount_percent': '20',
+        }])
+
+        item = response.data['items'][0]
+        # Quoted at 1.8, but 20% off the price leaves 1.24 actually earned.
+        self.assertEqual(str(item['margin']), '1.8000')
+        self.assertEqual(str(item['effective_margin']), '1.2400')

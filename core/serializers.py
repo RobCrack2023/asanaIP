@@ -259,13 +259,14 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'name', 'sku', 'description', 'unit',
                   'currency', 'cost_amount', 'import_multiplier', 'incoterm',
-                  'cost_rate', 'cost', 'cost_is_stale', 'unit_price',
+                  'cost_rate', 'cost', 'cost_is_stale', 'default_margin', 'unit_price',
                   'margin', 'unit_profit', 'supplier', 'lead_time_days', 'is_active',
                   'created_at', 'updated_at']
-        # cost and cost_rate are derived from cost_amount, currency and the
-        # rate in force; sending them directly would let the two disagree.
-        read_only_fields = ['id', 'cost', 'cost_rate', 'cost_is_stale', 'margin',
-                            'unit_profit', 'created_at', 'updated_at']
+        # The catalog is costed and marked up; the price falls out of the two.
+        # cost and cost_rate likewise follow from cost_amount, currency and
+        # the rate in force — sending any of them would let them disagree.
+        read_only_fields = ['id', 'cost', 'cost_rate', 'cost_is_stale', 'unit_price',
+                            'margin', 'unit_profit', 'created_at', 'updated_at']
 
     def get_cost_is_stale(self, obj):
         return obj.cost_is_stale(self._rates())
@@ -280,9 +281,9 @@ class ProductSerializer(serializers.ModelSerializer):
             self._cached_rates = ExchangeRate.current_for(organization)
         return self._cached_rates
 
-    def validate_unit_price(self, value):
-        if value < 0:
-            raise serializers.ValidationError('El precio no puede ser negativo.')
+    def validate_default_margin(self, value):
+        if value <= -1:
+            raise serializers.ValidationError('El margen no puede dejar el precio en cero o negativo.')
         return value
 
     def validate_cost_amount(self, value):
@@ -326,7 +327,7 @@ class ProductSerializer(serializers.ModelSerializer):
         rates = self._rates()
         rate = rates.rate_for(product.currency) if rates else Decimal('1')
         product.apply_rate(rate if product.currency != Currency.CLP else Decimal('1'))
-        product.save(update_fields=['cost', 'cost_rate'])
+        product.save(update_fields=['cost', 'cost_rate', 'unit_price'])
 
     def create(self, validated_data):
         product = super().create(validated_data)
@@ -349,13 +350,34 @@ class QuoteItemSerializer(serializers.ModelSerializer):
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     cost_subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
+    effective_margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
 
     class Meta:
         model = QuoteItem
-        fields = ['id', 'product', 'description', 'unit', 'quantity', 'unit_cost', 'unit_price',
-                  'discount_percent', 'subtotal', 'cost_subtotal', 'profit', 'margin', 'order']
-        read_only_fields = ['id', 'subtotal', 'cost_subtotal', 'profit', 'margin']
+        fields = ['id', 'product', 'description', 'unit', 'quantity', 'unit_cost', 'margin',
+                  'unit_price', 'discount_percent', 'subtotal', 'cost_subtotal', 'profit',
+                  'effective_margin', 'order']
+        # unit_price follows from unit_cost and margin on any costed line.
+        read_only_fields = ['id', 'subtotal', 'cost_subtotal', 'profit', 'effective_margin']
+
+    def validate_margin(self, value):
+        if value is not None and value <= -1:
+            raise serializers.ValidationError('El margen no puede dejar el precio en cero o negativo.')
+        return value
+
+    def validate(self, attrs):
+        """A line needs either a cost to mark up or a price stated outright."""
+        cost = attrs.get('unit_cost') or 0
+        margin = attrs.get('margin')
+        if cost and margin is None:
+            raise serializers.ValidationError(
+                {'margin': 'Indica el margen a aplicar sobre el costo.'}
+            )
+        if not cost and not attrs.get('unit_price'):
+            raise serializers.ValidationError(
+                {'unit_price': 'Un ítem sin costo necesita un precio.'}
+            )
+        return attrs
 
     def validate_description(self, value):
         description = (value or '').strip()
@@ -424,10 +446,13 @@ class QuoteSerializer(serializers.ModelSerializer):
 
     def _write_items(self, quote, items_data):
         quote.items.all().delete()
-        QuoteItem.objects.bulk_create([
-            QuoteItem(quote=quote, order=order, **item)
-            for order, item in enumerate(items_data)
-        ])
+        items = []
+        for order, data in enumerate(items_data):
+            item = QuoteItem(quote=quote, order=order, **data)
+            # Price is derived, so a client sending its own is simply ignored.
+            item.apply_margin()
+            items.append(item)
+        QuoteItem.objects.bulk_create(items)
 
     @transaction.atomic
     def create(self, validated_data):

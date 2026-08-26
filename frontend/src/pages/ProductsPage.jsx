@@ -205,7 +205,8 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
     cost_amount: product?.cost_amount ?? '',
     incoterm: product?.incoterm || 'DDP',
     import_multiplier: product?.import_multiplier ?? '1',
-    unit_price: product?.unit_price ?? '',
+    // Stored as a fraction; shown as a percentage.
+    default_margin: product ? String(Number(product.default_margin) * 100) : '',
     supplier: product?.supplier || '',
     lead_time_days: product?.lead_time_days ?? '',
   })
@@ -218,7 +219,8 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
   const rate = form.currency === 'CLP' ? 1 : Number(rates?.[form.currency.toLowerCase()]) || 0
   const multiplier = form.incoterm === 'DDP' ? 1 : Number(form.import_multiplier) || 1
   const cost = (Number(form.cost_amount) || 0) * rate * multiplier
-  const liveMargin = cost ? (Number(form.unit_price) || 0) / cost - 1 : null
+  const liveMargin = (Number(form.default_margin) || 0) / 100
+  const price = cost * (1 + liveMargin)
   const missingRate = form.currency !== 'CLP' && !rate
 
   const handleSubmit = async (e) => {
@@ -234,7 +236,7 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
         ...form,
         cost_amount: form.cost_amount || 0,
         import_multiplier: form.import_multiplier || 1,
-        unit_price: form.unit_price || 0,
+        default_margin: (Number(form.default_margin) || 0) / 100,
         lead_time_days: form.lead_time_days === '' ? null : Number(form.lead_time_days),
       }
       if (isEdit) {
@@ -247,7 +249,7 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
     } catch (err) {
       const data = err.response?.data
       setError(data?.sku?.[0] || data?.currency?.[0] || data?.cost_amount?.[0]
-        || data?.import_multiplier?.[0] || data?.unit_price?.[0]
+        || data?.import_multiplier?.[0] || data?.default_margin?.[0]
         || 'Error al guardar el producto')
       setSaving(false)
     }
@@ -286,8 +288,8 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
             <input type="number" min="0" step="any" value={form.cost_amount} onChange={(e) => handleChange('cost_amount', e.target.value)} placeholder="0" />
           </div>
           <div className="modal-field">
-            <label>Precio de venta (CLP)</label>
-            <input type="number" min="0" step="any" value={form.unit_price} onChange={(e) => handleChange('unit_price', e.target.value)} placeholder="0" />
+            <label>Margen %</label>
+            <input type="number" step="any" value={form.default_margin} onChange={(e) => handleChange('default_margin', e.target.value)} placeholder="30" />
           </div>
         </div>
 
@@ -324,10 +326,10 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
         )}
 
         <div className="product-margin-preview">
-          <span>Costo en pesos</span>
-          <strong className="cost-preview">{formatMoney(cost)}</strong>
+          <span>Costo {formatMoney(cost)} · margen {formatMargin(liveMargin)} →</span>
+          <strong>{formatMoney(price)}</strong>
           <span className="product-margin-profit">
-            Margen {formatMargin(liveMargin)} · utilidad {formatMoney((Number(form.unit_price) || 0) - cost)}
+            precio sugerido · utilidad {formatMoney(price - cost)}
           </span>
         </div>
 
