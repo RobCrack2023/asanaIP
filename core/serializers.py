@@ -1,9 +1,8 @@
-from decimal import Decimal, InvalidOperation
-
+from django.db import transaction
 from rest_framework import serializers
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
-    Client, Opportunity, OpportunityActivity, Quote, Product,
+    Client, Opportunity, OpportunityActivity, Quote, QuoteItem, Product,
 )
 
 
@@ -230,60 +229,97 @@ class ProductSerializer(serializers.ModelSerializer):
         return sku
 
 
+class QuoteItemSerializer(serializers.ModelSerializer):
+    product = OrgScopedRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
+    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = QuoteItem
+        fields = ['id', 'product', 'description', 'unit', 'quantity', 'unit_price',
+                  'discount_percent', 'subtotal', 'order']
+        read_only_fields = ['id', 'subtotal']
+
+    def validate_description(self, value):
+        description = (value or '').strip()
+        if not description:
+            raise serializers.ValidationError('El ítem necesita una descripción.')
+        return description
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('La cantidad debe ser mayor que cero.')
+        return value
+
+    def validate_unit_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('El precio unitario no puede ser negativo.')
+        return value
+
+    def validate_discount_percent(self, value):
+        if not 0 <= value <= 100:
+            raise serializers.ValidationError('El descuento debe estar entre 0 y 100.')
+        return value
+
+
 class QuoteSerializer(serializers.ModelSerializer):
     opportunity = OrgScopedRelatedField(queryset=Opportunity.objects.all())
+    items = QuoteItemSerializer(many=True, required=False)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    reference = serializers.CharField(read_only=True)
+    is_expired = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Quote
-        fields = ['id', 'opportunity', 'status', 'line_items', 'total_amount', 'notes',
+        fields = ['id', 'opportunity', 'number', 'reference', 'status', 'status_display',
+                  'issue_date', 'valid_until', 'is_expired', 'tax_rate', 'items',
+                  'subtotal', 'tax_amount', 'total_amount', 'notes',
                   'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        # Every money figure is derived from the items; the client sends the
+        # breakdown and the rate, never the sums.
+        read_only_fields = ['id', 'number', 'subtotal', 'tax_amount', 'total_amount',
+                            'created_at', 'updated_at']
 
-    def validate_line_items(self, value):
-        """Normalize each item to {description, quantity, unit_price, subtotal}."""
-        if not isinstance(value, list):
-            raise serializers.ValidationError('Debe ser una lista de ítems.')
-
-        normalized = []
-        for index, raw in enumerate(value, start=1):
-            if not isinstance(raw, dict):
-                raise serializers.ValidationError(f'El ítem {index} no es válido.')
-
-            description = str(raw.get('description', '')).strip()
-            if not description:
-                raise serializers.ValidationError(f'El ítem {index} necesita una descripción.')
-
-            try:
-                quantity = Decimal(str(raw.get('quantity', '0')))
-                unit_price = Decimal(str(raw.get('unit_price', '0')))
-            except (InvalidOperation, TypeError):
-                raise serializers.ValidationError(
-                    f'La cantidad y el precio unitario del ítem {index} deben ser numéricos.'
-                )
-
-            if quantity <= 0:
-                raise serializers.ValidationError(f'La cantidad del ítem {index} debe ser mayor que cero.')
-            if unit_price < 0:
-                raise serializers.ValidationError(f'El precio unitario del ítem {index} no puede ser negativo.')
-
-            normalized.append({
-                'description': description[:200],
-                'quantity': float(quantity),
-                'unit_price': float(unit_price),
-                'subtotal': float(quantity * unit_price),
-            })
-        return normalized
+    def validate_tax_rate(self, value):
+        if not 0 <= value <= 100:
+            raise serializers.ValidationError('La tasa de impuesto debe estar entre 0 y 100.')
+        return value
 
     def validate(self, attrs):
-        # With a breakdown the total is derived, never whatever the client sent.
-        # Quotes without items keep the manually entered total.
-        items = attrs.get('line_items')
-        if items:
-            attrs['total_amount'] = sum(
-                (Decimal(str(item['quantity'])) * Decimal(str(item['unit_price'])) for item in items),
-                Decimal('0'),
+        issue_date = attrs.get('issue_date', getattr(self.instance, 'issue_date', None))
+        valid_until = attrs.get('valid_until', getattr(self.instance, 'valid_until', None))
+        if issue_date and valid_until and valid_until < issue_date:
+            raise serializers.ValidationError(
+                {'valid_until': 'La validez no puede ser anterior a la fecha de emisión.'}
             )
         return attrs
+
+    def _write_items(self, quote, items_data):
+        quote.items.all().delete()
+        QuoteItem.objects.bulk_create([
+            QuoteItem(quote=quote, order=order, **item)
+            for order, item in enumerate(items_data)
+        ])
+
+    @transaction.atomic
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        quote = Quote(
+            organization=validated_data['opportunity'].organization, **validated_data
+        )
+        quote.assign_number()
+        quote.save()
+        self._write_items(quote, items_data)
+        quote.recalculate()
+        return quote
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+        quote = super().update(instance, validated_data)
+        if items_data is not None:
+            self._write_items(quote, items_data)
+        quote.recalculate()
+        return quote
 
 
 class OpportunityActivitySerializer(serializers.ModelSerializer):

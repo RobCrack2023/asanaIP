@@ -732,12 +732,12 @@ class OpportunityActivityViewSet(viewsets.ModelViewSet):
 
 
 class QuoteViewSet(viewsets.ModelViewSet):
-    queryset = Quote.objects.all()
+    queryset = Quote.objects.prefetch_related('items__product').all()
     serializer_class = QuoteSerializer
     permission_classes = [IsStaffOrSales]
 
     def get_queryset(self):
-        qs = super().get_queryset().filter(opportunity__organization=self.request.user.organization)
+        qs = super().get_queryset().filter(organization=self.request.user.organization)
         opportunity_id = self.request.query_params.get('opportunity')
         if opportunity_id:
             qs = qs.filter(opportunity_id=opportunity_id)

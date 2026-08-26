@@ -1,7 +1,10 @@
+from decimal import Decimal
+
 from rest_framework.test import APITestCase
 
 from .models import (
-    Area, Client, Opportunity, OpportunityActivity, Organization, Quote, Team, User,
+    Area, Client, Opportunity, OpportunityActivity, Organization, Product, Quote,
+    QuoteItem, Team, User,
 )
 
 
@@ -31,7 +34,7 @@ class CrossTenantCrmTests(APITestCase):
     def test_cannot_attach_quote_to_another_orgs_opportunity(self):
         response = self.client.post('/api/quotes/', {
             'opportunity': self.opportunity_b.id,
-            'line_items': [{'description': 'Servicio', 'quantity': 1, 'unit_price': 1000}],
+            'items': [{'description': 'Servicio', 'quantity': 1, 'unit_price': 1000}],
         }, format='json')
 
         self.assertEqual(response.status_code, 400)
@@ -70,10 +73,11 @@ class CrossTenantCrmTests(APITestCase):
 
         quote = self.client.post('/api/quotes/', {
             'opportunity': create.data['id'],
-            'line_items': [{'description': 'Servicio', 'quantity': 2, 'unit_price': 1500}],
+            'items': [{'description': 'Servicio', 'quantity': 2, 'unit_price': 1500}],
         }, format='json')
         self.assertEqual(quote.status_code, 201)
-        self.assertEqual(str(quote.data['total_amount']), '3000.00')
+        self.assertEqual(str(quote.data['subtotal']), '3000.00')
+        self.assertEqual(str(quote.data['total_amount']), '3570.00')
 
 
 class OpportunityTimelineTests(APITestCase):
@@ -165,3 +169,134 @@ class OpportunityTimelineTests(APITestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertTrue(self.opportunity.activities.filter(pk=activity.pk).exists())
+
+
+class QuoteTests(APITestCase):
+    """Totals are derived from the items; numbering runs per company."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client_record = Client.objects.create(organization=self.org, name='Cliente A')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=self.client_record, name='Planta nueva',
+        )
+        self.product = Product.objects.create(
+            organization=self.org, name='Bomba centrífuga', sku='BC-1', unit_price=Decimal('850000'),
+        )
+        self.client.login(username='vendedor', password='secret')
+
+    def _post_quote(self, items, **extra):
+        return self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id, 'items': items, **extra,
+        }, format='json')
+
+    def test_totals_are_computed_from_items_with_tax(self):
+        response = self._post_quote([
+            {'description': 'Bomba', 'quantity': 2, 'unit_price': '100000'},
+            {'description': 'Montaje', 'quantity': 1, 'unit_price': '50000'},
+        ])
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(str(response.data['subtotal']), '250000.00')
+        self.assertEqual(str(response.data['tax_amount']), '47500.00')
+        self.assertEqual(str(response.data['total_amount']), '297500.00')
+
+    def test_discount_is_applied_per_item(self):
+        response = self._post_quote([
+            {'description': 'Bomba', 'quantity': 2, 'unit_price': '100000', 'discount_percent': '10'},
+        ])
+
+        self.assertEqual(str(response.data['subtotal']), '180000.00')
+        self.assertEqual(str(response.data['items'][0]['subtotal']), '180000.00')
+
+    def test_client_cannot_dictate_the_total(self):
+        response = self._post_quote(
+            [{'description': 'Bomba', 'quantity': 1, 'unit_price': '100000'}],
+            total_amount='1',
+        )
+
+        self.assertEqual(str(response.data['total_amount']), '119000.00')
+
+    def test_tax_rate_is_configurable_and_stored(self):
+        response = self._post_quote(
+            [{'description': 'Servicio exento', 'quantity': 1, 'unit_price': '100000'}],
+            tax_rate='0',
+        )
+
+        self.assertEqual(str(response.data['tax_amount']), '0.00')
+        self.assertEqual(str(response.data['total_amount']), '100000.00')
+
+    def test_numbers_run_sequentially_per_organization(self):
+        first = self._post_quote([{'description': 'A', 'quantity': 1, 'unit_price': '1000'}])
+        second = self._post_quote([{'description': 'B', 'quantity': 1, 'unit_price': '1000'}])
+
+        self.assertEqual(first.data['number'], 1)
+        self.assertEqual(second.data['number'], 2)
+        self.assertEqual(second.data['reference'], 'Cotización N° 2')
+
+    def test_deleting_a_quote_does_not_reuse_its_number(self):
+        first = self._post_quote([{'description': 'A', 'quantity': 1, 'unit_price': '1000'}])
+        self.client.delete(f"/api/quotes/{first.data['id']}/")
+
+        second = self._post_quote([{'description': 'B', 'quantity': 1, 'unit_price': '1000'}])
+
+        self.assertEqual(second.data['number'], 2)
+
+    def test_item_can_point_at_a_catalog_product(self):
+        response = self._post_quote([{
+            'product': self.product.id, 'description': 'Bomba centrífuga',
+            'quantity': 1, 'unit_price': '850000',
+        }])
+
+        self.assertEqual(response.data['items'][0]['product'], self.product.id)
+        self.assertEqual(self.product.quote_items.count(), 1)
+
+    def test_editing_the_catalog_does_not_rewrite_a_sent_quote(self):
+        self._post_quote([{
+            'product': self.product.id, 'description': 'Bomba centrífuga',
+            'quantity': 1, 'unit_price': '850000',
+        }])
+
+        self.product.name = 'Bomba centrífuga XL'
+        self.product.unit_price = Decimal('990000')
+        self.product.save()
+
+        item = QuoteItem.objects.get()
+        self.assertEqual(item.description, 'Bomba centrífuga')
+        self.assertEqual(item.unit_price, Decimal('850000'))
+
+    def test_updating_items_restates_the_totals(self):
+        created = self._post_quote([{'description': 'A', 'quantity': 1, 'unit_price': '100000'}])
+
+        response = self.client.patch(f"/api/quotes/{created.data['id']}/", {
+            'items': [{'description': 'A', 'quantity': 3, 'unit_price': '100000'}],
+        }, format='json')
+
+        self.assertEqual(str(response.data['subtotal']), '300000.00')
+        self.assertEqual(QuoteItem.objects.count(), 1)
+
+    def test_validity_cannot_precede_the_issue_date(self):
+        response = self._post_quote(
+            [{'description': 'A', 'quantity': 1, 'unit_price': '1000'}],
+            issue_date='2026-08-20', valid_until='2026-08-10',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('valid_until', response.data)
+
+    def test_rejects_a_zero_quantity(self):
+        response = self._post_quote([{'description': 'A', 'quantity': 0, 'unit_price': '1000'}])
+        self.assertEqual(response.status_code, 400)
+
+    def test_cannot_quote_another_orgs_product(self):
+        other_org = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        foreign = Product.objects.create(organization=other_org, name='Ajeno', unit_price=1)
+
+        response = self._post_quote([{
+            'product': foreign.id, 'description': 'Ajeno', 'quantity': 1, 'unit_price': '1000',
+        }])
+
+        self.assertEqual(response.status_code, 400)

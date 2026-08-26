@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -20,6 +22,9 @@ class Organization(models.Model):
     plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, blank=True)
     max_users = models.PositiveIntegerField(default=10)
     is_active = models.BooleanField(default=True)
+    # Last number handed to a quote. Never decreases, so numbering stays unique
+    # even when a quote is deleted.
+    quote_counter = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -429,9 +434,21 @@ class Quote(models.Model):
         APPROVED = 'approved', 'Aprobada'
         REJECTED = 'rejected', 'Rechazada'
 
+    #: Chile's VAT. Stored per quote so past documents keep the rate they were issued with.
+    DEFAULT_TAX_RATE = Decimal('19.00')
+
     opportunity = models.ForeignKey(Opportunity, on_delete=models.CASCADE, related_name='quotes')
+    # Denormalized from the opportunity: the running number is per company and
+    # needs a database constraint, which cannot span a relation.
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='quotes')
+    number = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
-    line_items = models.JSONField(default=list, blank=True)
+    issue_date = models.DateField(default=timezone.localdate)
+    valid_until = models.DateField(null=True, blank=True)
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=DEFAULT_TAX_RATE)
+    # Derived from the items by recalculate(); never written by the client.
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -439,9 +456,81 @@ class Quote(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'number'],
+                condition=models.Q(number__isnull=False),
+                name='unique_quote_number_per_organization',
+            ),
+        ]
 
     def __str__(self):
-        return f'Cotización #{self.id} — {self.opportunity.name}'
+        return f'{self.reference} — {self.opportunity.name}'
+
+    @property
+    def reference(self):
+        return f'Cotización N° {self.number}' if self.number else 'Cotización sin número'
+
+    @property
+    def is_expired(self):
+        return bool(self.valid_until and self.valid_until < timezone.localdate())
+
+    def assign_number(self):
+        """Take the next running number from the company's counter.
+
+        The counter only ever moves forward, so a number that reached a client
+        is never handed to a second document — deleting a quote leaves a gap
+        rather than freeing its number. Must run inside a transaction.
+        """
+        if self.number:
+            return self.number
+        organization = (
+            Organization.objects.select_for_update().get(pk=self.organization_id)
+        )
+        organization.quote_counter += 1
+        organization.save(update_fields=['quote_counter'])
+        self.number = organization.quote_counter
+        return self.number
+
+    def recalculate(self, save=True):
+        subtotal = sum((item.subtotal for item in self.items.all()), Decimal('0'))
+        self.subtotal = subtotal.quantize(Decimal('0.01'))
+        self.tax_amount = (self.subtotal * self.tax_rate / Decimal('100')).quantize(Decimal('0.01'))
+        self.total_amount = self.subtotal + self.tax_amount
+        if save:
+            self.save(update_fields=['subtotal', 'tax_amount', 'total_amount', 'updated_at'])
+        return self.total_amount
+
+
+class QuoteItem(models.Model):
+    """A line on a quote.
+
+    The product is a pointer for reporting, but description and unit_price are
+    copied at the time of quoting: editing the catalog later must not silently
+    rewrite a document already sent to a client.
+    """
+
+    quote = models.ForeignKey(Quote, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name='quote_items')
+    description = models.CharField(max_length=200)
+    unit = models.CharField(max_length=20, blank=True, default='unidad')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f'{self.description} x{self.quantity}'
+
+    @property
+    def subtotal(self):
+        gross = self.quantity * self.unit_price
+        discount = gross * self.discount_percent / Decimal('100')
+        return (gross - discount).quantize(Decimal('0.01'))
 
 
 class OpportunityActivity(models.Model):

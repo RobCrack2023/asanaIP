@@ -503,8 +503,11 @@ function MarkLostModal({ onClose, onConfirm }) {
 }
 
 function QuoteCard({ quote, onDelete }) {
-  const items = quote.line_items || []
+  const items = quote.items || []
   const [expanded, setExpanded] = useState(false)
+
+  const formatDate = (value) =>
+    value ? new Date(`${value}T00:00:00`).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
 
   return (
     <div className="opp-quote-card">
@@ -515,14 +518,14 @@ function QuoteCard({ quote, onDelete }) {
         {items.length > 0 && (
           <ChevronRight size={14} className={`opp-quote-chevron ${expanded ? 'open' : ''}`} />
         )}
+        <span className="opp-quote-number">N° {quote.number}</span>
         <span className={`quote-status-badge ${quote.status}`}>{QUOTE_STATUS_LABELS[quote.status]}</span>
         <span className="opp-quote-amount">{formatMoney(quote.total_amount)}</span>
         {items.length > 0 && (
           <span className="opp-quote-count">{items.length} {items.length === 1 ? 'ítem' : 'ítems'}</span>
         )}
-        <span className="opp-quote-date">
-          {new Date(quote.created_at).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}
-        </span>
+        {quote.is_expired && <span className="opp-quote-expired">Vencida</span>}
+        <span className="opp-quote-date">{formatDate(quote.issue_date)}</span>
         {quote.notes && <span className="opp-quote-notes">{quote.notes}</span>}
         <button
           className="opp-quote-delete"
@@ -539,19 +542,31 @@ function QuoteCard({ quote, onDelete }) {
             <span>Descripción</span>
             <span>Cant.</span>
             <span>Precio unitario</span>
+            <span>Desc. %</span>
             <span>Subtotal</span>
           </div>
-          {items.map((item, index) => (
-            <div key={index} className="quote-detail-row">
+          {items.map((item) => (
+            <div key={item.id} className="quote-detail-row">
               <span>{item.description}</span>
-              <span>{item.quantity}</span>
+              <span>{Number(item.quantity)}</span>
               <span>{formatMoney(item.unit_price)}</span>
-              <span>{formatMoney(item.subtotal ?? item.quantity * item.unit_price)}</span>
+              <span>{Number(item.discount_percent) ? `${Number(item.discount_percent)}%` : '—'}</span>
+              <span>{formatMoney(item.subtotal)}</span>
             </div>
           ))}
-          <div className="quote-detail-total">
-            <span>Total</span>
-            <strong>{formatMoney(quote.total_amount)}</strong>
+          <div className="quote-detail-totals">
+            <div className="quote-total-line">
+              <span>Neto</span><span>{formatMoney(quote.subtotal)}</span>
+            </div>
+            <div className="quote-total-line">
+              <span>IVA {Number(quote.tax_rate)}%</span><span>{formatMoney(quote.tax_amount)}</span>
+            </div>
+            <div className="quote-total-line grand">
+              <span>Total</span><strong>{formatMoney(quote.total_amount)}</strong>
+            </div>
+          </div>
+          <div className="quote-detail-validity">
+            Válida hasta: {formatDate(quote.valid_until)}
           </div>
         </div>
       )}
@@ -559,18 +574,29 @@ function QuoteCard({ quote, onDelete }) {
   )
 }
 
-const emptyItem = () => ({ description: '', quantity: '1', unit_price: '' })
+const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_price: '', discount_percent: '' })
 
-const itemSubtotal = (item) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
+const itemSubtotal = (item) => {
+  const gross = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
+  return gross - gross * (Number(item.discount_percent) || 0) / 100
+}
+
+const today = () => new Date().toISOString().slice(0, 10)
 
 function QuoteFormModal({ products = [], onClose, onSaved }) {
   const [status, setStatus] = useState('draft')
   const [items, setItems] = useState([emptyItem()])
   const [notes, setNotes] = useState('')
+  const [taxRate, setTaxRate] = useState('19')
+  const [issueDate, setIssueDate] = useState(today())
+  const [validUntil, setValidUntil] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const total = items.reduce((sum, item) => sum + itemSubtotal(item), 0)
+  // Mirrors what the server will compute, so the figures never disagree.
+  const subtotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0)
+  const taxAmount = subtotal * (Number(taxRate) || 0) / 100
+  const total = subtotal + taxAmount
 
   const updateItem = (index, field, value) =>
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, [field]: value } : item)))
@@ -583,11 +609,12 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
     const product = products.find((p) => String(p.id) === productId)
     if (!product) return
     const row = {
-      description: product.unit && product.unit !== 'unidad'
-        ? `${product.name} (${product.unit})`
-        : product.name,
+      product: product.id,
+      description: product.name,
+      unit: product.unit || 'unidad',
       quantity: '1',
       unit_price: String(product.unit_price ?? ''),
+      discount_percent: '',
     }
     setItems((prev) => {
       const last = prev[prev.length - 1]
@@ -615,15 +642,25 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
       await onSaved({
         status,
         notes,
-        line_items: filled.map((item) => ({
+        tax_rate: Number(taxRate) || 0,
+        issue_date: issueDate,
+        valid_until: validUntil || null,
+        items: filled.map((item) => ({
+          product: item.product ?? null,
           description: item.description.trim(),
+          unit: item.unit || 'unidad',
           quantity: Number(item.quantity),
           unit_price: Number(item.unit_price) || 0,
+          discount_percent: Number(item.discount_percent) || 0,
         })),
       })
       onClose()
     } catch (err) {
-      setError(err.response?.data?.line_items?.[0] || 'Error al crear la cotización')
+      const data = err.response?.data
+      setError(
+        data?.valid_until?.[0] || data?.items?.[0] || data?.tax_rate?.[0]
+        || 'Error al crear la cotización'
+      )
       setSaving(false)
     }
   }
@@ -640,6 +677,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
               <span>Descripción</span>
               <span>Cant.</span>
               <span>Precio unitario</span>
+              <span>Desc. %</span>
               <span>Subtotal</span>
               <span></span>
             </div>
@@ -664,6 +702,15 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
                   step="any"
                   value={item.unit_price}
                   onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                  placeholder="0"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="any"
+                  value={item.discount_percent}
+                  onChange={(e) => updateItem(index, 'discount_percent', e.target.value)}
                   placeholder="0"
                 />
                 <span className="quote-item-subtotal">{formatMoney(itemSubtotal(item))}</span>
@@ -700,16 +747,48 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="quote-total-row">
-          <span>Total</span>
-          <strong>{formatMoney(total)}</strong>
+        <div className="quote-totals">
+          <div className="quote-total-line">
+            <span>Neto</span>
+            <span>{formatMoney(subtotal)}</span>
+          </div>
+          <div className="quote-total-line">
+            <span>
+              IVA
+              <input
+                className="quote-tax-input"
+                type="number"
+                min="0"
+                max="100"
+                step="any"
+                value={taxRate}
+                onChange={(e) => setTaxRate(e.target.value)}
+              />
+              %
+            </span>
+            <span>{formatMoney(taxAmount)}</span>
+          </div>
+          <div className="quote-total-line grand">
+            <span>Total</span>
+            <strong>{formatMoney(total)}</strong>
+          </div>
         </div>
 
-        <div className="modal-field">
-          <label>Estado</label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            {Object.entries(QUOTE_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
+        <div className="form-row">
+          <div className="modal-field">
+            <label>Fecha de emisión</label>
+            <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
+          </div>
+          <div className="modal-field">
+            <label>Válida hasta</label>
+            <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+          </div>
+          <div className="modal-field">
+            <label>Estado</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              {Object.entries(QUOTE_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
         </div>
 
         <div className="modal-field">
