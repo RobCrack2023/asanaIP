@@ -290,8 +290,28 @@
   transform: rotate(90deg);
 }
 
-.opp-quote-delete {
+.opp-quote-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.opp-quote-pdf {
+  padding: 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.opp-quote-pdf:hover {
+  background: #eef3fc;
+  color: var(--accent);
+}
+
+.opp-quote-delete {
   padding: 5px;
   border-radius: 5px;
   color: var(--text-muted);
@@ -318,7 +338,7 @@
 
 .quote-items-head {
   display: grid;
-  grid-template-columns: 1fr 52px 96px 66px 96px 56px 96px;
+  grid-template-columns: 1fr 92px 52px 96px 66px 96px 56px 96px;
   gap: 8px;
   font-size: 11px;
   font-weight: 600;
@@ -330,26 +350,27 @@
 
 .quote-detail-row {
   display: grid;
-  grid-template-columns: 1fr 52px 96px 66px 96px 56px 96px;
+  grid-template-columns: 1fr 92px 52px 96px 66px 96px 56px 96px;
   gap: 8px;
   font-size: 13px;
   padding: 5px 0;
   border-top: 1px solid var(--border-color);
 }
 
-.quote-detail-row span:nth-child(n + 2) {
+.quote-items-head span:nth-child(n + 3),
+.quote-detail-row span:nth-child(n + 3) {
   text-align: right;
 }
 
 /* Quote line items — editor inside the modal */
-/* Seven columns now that cost sits beside price. */
+/* Eight columns: description, kind of cost, and the six money ones. */
 .modal-overlay.modal-wide .modal {
-  width: 760px;
+  width: 880px;
   max-width: calc(100vw - 48px);
 }
 
 .quote-items .quote-items-head {
-  grid-template-columns: 1fr 50px 92px 62px 92px 54px 92px 28px;
+  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 28px;
 }
 
 .quote-items-head + .quote-item-row {
@@ -358,7 +379,7 @@
 
 .quote-item-row {
   display: grid;
-  grid-template-columns: 1fr 50px 92px 62px 92px 54px 92px 28px;
+  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 28px;
   gap: 8px;
   align-items: center;
   padding: 4px 0;
@@ -777,4 +798,23 @@
 .quote-item-row input:disabled {
   background: var(--content-bg-hover);
   color: var(--text-muted);
+}
+
+/* Kind of cost, chosen per line. Narrow on purpose: the full wording lives in
+   the breakdown under the totals. */
+.quote-category-select {
+  width: 100%;
+  padding: 5px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.quote-category-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }

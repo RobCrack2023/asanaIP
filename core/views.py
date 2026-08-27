@@ -1,3 +1,5 @@
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -11,7 +13,7 @@ from rest_framework.permissions import BasePermission
 from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, Product, ProductPriceEntry,
-    ExchangeRate, Currency,
+    ExchangeRate, Currency, QuoteTemplate, ExpenseSheet, ProjectExpense,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
@@ -19,8 +21,10 @@ from .serializers import (
     AssetSerializer, OrganizationSerializer, PlanSerializer, NotificationSerializer,
     ClientSerializer, OpportunitySerializer, OpportunityActivitySerializer,
     QuoteSerializer, ProductSerializer, ProductPriceEntrySerializer,
-    ExchangeRateSerializer,
+    ExchangeRateSerializer, ClientQuoteSerializer, QuoteTemplateSerializer,
+    ExpenseSheetSerializer, ProjectExpenseSerializer,
 )
+from .quote_pdf import build_quote_pdf, quote_filename
 from . import emails
 from . import notifications as notif
 
@@ -76,6 +80,32 @@ def me_view(request):
         data['organization_name'] = request.user.organization.name
         data['organization_slug'] = request.user.organization.slug
     return Response(data)
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsStaffOrSales])
+def quote_template_view(request):
+    """The company's single quote layout: read by sales, edited by staff.
+
+    A singleton rather than a collection — one company, one letterhead — so it
+    lives at a fixed path instead of behind a router that would need an id
+    nobody has.
+    """
+    template = QuoteTemplate.for_organization(request.user.organization)
+
+    if request.method == 'GET':
+        return Response(QuoteTemplateSerializer(template, context={'request': request}).data)
+
+    if not (request.user.is_staff or request.user.is_super_admin):
+        return Response({'error': 'Solo un administrador puede cambiar la plantilla.'},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    serializer = QuoteTemplateSerializer(template, data=request.data,
+                                         partial=request.method == 'PATCH',
+                                         context={'request': request})
+    serializer.is_valid(raise_exception=True)
+    serializer.save(updated_by=request.user)
+    return Response(serializer.data)
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -187,6 +217,24 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if team_id:
             qs = qs.filter(team_id=team_id)
         return qs
+
+    @action(detail=True, methods=['get'], permission_classes=[IsStaffOrSales])
+    def costs(self, request, pk=None):
+        """Quoted against spent.
+
+        Its own endpoint rather than a field on the project: every member of
+        the team can read a project, and what the deal earns is not theirs to
+        see.
+
+        Scoped to the company rather than through get_object(), which narrows
+        non-staff users to their own teams — the salesperson who closed the
+        deal is rarely on the team that executes it.
+        """
+        project = get_object_or_404(
+            Project.objects.filter(team__area__organization=request.user.organization),
+            pk=pk,
+        )
+        return Response(project.cost_summary)
 
 
 class SectionViewSet(viewsets.ModelViewSet):
@@ -747,6 +795,41 @@ class ProductViewSet(viewsets.ModelViewSet):
         })
 
 
+class ProjectExpenseViewSet(viewsets.ModelViewSet):
+    """What executing a project actually cost the company."""
+
+    queryset = ProjectExpense.objects.select_related('recorded_by', 'project').all()
+    serializer_class = ProjectExpenseSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(
+            project__team__area__organization=self.request.user.organization
+        )
+        project_id = self.request.query_params.get('project')
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(recorded_by=self.request.user)
+
+
+class ExpenseSheetViewSet(viewsets.ModelViewSet):
+    """The breakdown behind the operating expenses of a deal."""
+
+    queryset = ExpenseSheet.objects.prefetch_related('lines').select_related('created_by').all()
+    serializer_class = ExpenseSheetSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(organization=self.request.user.organization)
+        opportunity_id = self.request.query_params.get('opportunity')
+        if opportunity_id:
+            qs = qs.filter(opportunity_id=opportunity_id)
+        return qs
+
+
 class OpportunityActivityViewSet(viewsets.ModelViewSet):
     queryset = OpportunityActivity.objects.select_related('author', 'opportunity').all()
     serializer_class = OpportunityActivitySerializer
@@ -805,3 +888,40 @@ class QuoteViewSet(viewsets.ModelViewSet):
         if opportunity_id:
             qs = qs.filter(opportunity_id=opportunity_id)
         return qs
+
+    def _client_payload(self, quote):
+        """What the client is allowed to see — the only door out of here.
+
+        Both the preview and the PDF read this, so the document on screen and
+        the file that reaches the client can never disagree about what is
+        shown, and neither can grow a cost column without passing through
+        ClientQuoteSerializer.
+        """
+        return ClientQuoteSerializer(quote, context=self.get_serializer_context()).data
+
+    @action(detail=True, methods=['get'], url_path='client-view')
+    def client_view(self, request, pk=None):
+        """The quote stripped for the client, plus the template it is laid on.
+
+        Feeds the live preview in Plantilla de cotización; the numbers are the
+        real ones, minus cost, margin and profit.
+        """
+        quote = self.get_object()
+        template = QuoteTemplate.for_organization(request.user.organization)
+        return Response({
+            'quote': self._client_payload(quote),
+            'template': QuoteTemplateSerializer(template, context={'request': request}).data,
+        })
+
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        quote = self.get_object()
+        template = QuoteTemplate.for_organization(request.user.organization)
+        payload = self._client_payload(quote)
+        response = HttpResponse(build_quote_pdf(payload, template),
+                                content_type='application/pdf')
+        disposition = 'attachment' if request.query_params.get('download') else 'inline'
+        response['Content-Disposition'] = (
+            f'{disposition}; filename="{quote_filename(payload, template)}"'
+        )
+        return response

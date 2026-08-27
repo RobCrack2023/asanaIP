@@ -12,6 +12,7 @@ import ClientsPage from './pages/ClientsPage'
 import ProductsPage from './pages/ProductsPage'
 import OpportunitiesPage from './pages/OpportunitiesPage'
 import OpportunityDetailPage from './pages/OpportunityDetailPage'
+import QuoteTemplatePage from './pages/QuoteTemplatePage'
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -39,12 +40,13 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/area/:areaId" element={<AreaView />} />
-        <Route path="/project/:projectId" element={<ProjectView />} />
+        <Route path="/project/:projectId" element={<ProjectView user={user} />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/opportunities" element={<OpportunitiesPage />} />
         <Route path="/opportunities/:opportunityId" element={<OpportunityDetailPage />} />
+        <Route path="/quote-template" element={<QuoteTemplatePage user={user} />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Layout>

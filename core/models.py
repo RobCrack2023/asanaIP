@@ -103,6 +103,16 @@ class Project(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='projects')
     color = models.CharField(max_length=7, default='#4573D2')
     owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='owned_projects')
+    # ── What the deal promised ────────────────────────────────────────────
+    # Stamped when the opportunity is won, never recomputed: the quote may be
+    # edited or deleted afterwards, and the yardstick has to stay the one the
+    # project was sold on.
+    budget_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    budget_sale = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: The winning quote's cost split, frozen with the rest. Stored rather
+    #: than read back through a relation for the same reason as the totals:
+    #: the quote can be edited or deleted, the promise cannot.
+    budget_categories = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -111,6 +121,85 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def expense_total(self):
+        return sum((expense.amount for expense in self.expenses.all()), Decimal('0'))
+
+    @property
+    def cost_summary(self):
+        """What the deal promised against what it is really costing.
+
+        Expenses are what turned up *on top of* the budget, not a restatement
+        of it: nobody is going to re-enter the datalogger they already quoted,
+        so the real cost is the budget plus what appeared. Reading the
+        expenses as the whole cost would report an absurd margin until every
+        peso of the original quote had been keyed in again.
+
+        The sale does not move — the client accepted a document — so every
+        extra peso comes straight out of the profit.
+        """
+        extra_cost = self.expense_total
+        real_cost = self.budget_cost + extra_cost
+        return {
+            'budget_cost': self.budget_cost,
+            'extra_cost': extra_cost,
+            'real_cost': real_cost,
+            'budget_sale': self.budget_sale,
+            'quoted_margin': markup(self.budget_sale, self.budget_cost),
+            'real_margin': markup(self.budget_sale, real_cost),
+            'quoted_profit': self.budget_sale - self.budget_cost,
+            'real_profit': self.budget_sale - real_cost,
+            'by_category': self.cost_by_category,
+        }
+
+    @property
+    def cost_by_category(self):
+        """Budgeted, plus what turned up, per kind of cost.
+
+        The budget side comes from the quote's own split, so the comparison
+        runs on the same categories the deal was priced with — and an expense
+        in a category nobody budgeted for still shows, which is the whole
+        point of recording the tyre.
+        """
+        budget = {row['category']: Decimal(row['cost']) for row in self.budget_categories}
+
+        spent = {}
+        for expense in self.expenses.all():
+            spent[expense.category] = spent.get(expense.category, Decimal('0')) + expense.amount
+
+        labels = dict(CostCategory.choices)
+        # Zero to two places like every other money figure, so a side that was
+        # never budgeted or never spent still reads as an amount.
+        nothing = Decimal('0.00')
+
+        rows = []
+        for category in CostCategory.values:
+            if category not in budget and category not in spent:
+                continue
+            budgeted = budget.get(category, nothing)
+            extra = spent.get(category, nothing)
+            rows.append({
+                'category': category,
+                'label': labels[category],
+                'budget': budgeted,
+                'extra': extra,
+                'real': budgeted + extra,
+            })
+        return rows
+
+    def stamp_budget(self, quote):
+        """Freeze what the deal promised, at the moment it is won."""
+        if quote is None:
+            return
+        self.budget_cost = quote.total_cost
+        self.budget_sale = quote.subtotal
+        # Decimals are not JSON, and the strings are read back as Decimal
+        # rather than float so the comparison never drifts by a cent.
+        self.budget_categories = [
+            {'category': row['category'], 'label': row['label'], 'cost': str(row['cost'])}
+            for row in quote.category_totals
+        ]
 
 
 class Section(models.Model):
@@ -332,6 +421,27 @@ class Currency(models.TextChoices):
     UF = 'UF', 'UF'
 
 
+class CostCategory(models.TextChoices):
+    """What kind of cost a line is, not who supplies it.
+
+    The Cálculo sheet mixes equipment, own labour and operating expenses in one
+    list and tells them apart only by writing "I&P" in the supplier column, so
+    nobody can answer how much of a deal is equipment and how much is expenses.
+    Naming the kind makes that a query instead of a reading exercise.
+
+    The margins each one carries are very different in practice — imported
+    equipment around 30%, own labour 180-380%, operating expenses 15-20% — so
+    a blended margin says little until it is broken down.
+    """
+
+    EQUIPO = 'equipo', 'Equipo o material'
+    SERVICIO = 'servicio', 'Servicio propio'
+    GASTO = 'gasto', 'Gasto operacional'
+    FLETE = 'flete', 'Flete y traslado'
+    PREVENCION = 'prevencion', 'Prevención y EPP'
+    OTRO = 'otro', 'Otro'
+
+
 class Incoterm(models.TextChoices):
     DDP = 'DDP', 'DDP — entregado con derechos pagados'
     DAP = 'DAP', 'DAP — entregado en destino'
@@ -396,6 +506,11 @@ class Product(models.Model):
     sku = models.CharField(max_length=50, blank=True)
     description = models.TextField(blank=True)
     unit = models.CharField(max_length=20, blank=True, default='unidad')
+    #: What kind of cost this is. A catalog entry for "Gastos operacionales
+    #: para instalación" is as legitimate as one for a datalogger — the Cálculo
+    #: sheet already keeps both in the same list.
+    category = models.CharField(max_length=12, choices=CostCategory.choices,
+                                default=CostCategory.EQUIPO)
     #: What the supplier charges, in their own currency.
     currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.CLP)
     cost_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -559,6 +674,16 @@ class Opportunity(models.Model):
     def __str__(self):
         return f'{self.name} ({self.client.name})'
 
+    @property
+    def winning_quote(self):
+        """The quote the deal was closed on.
+
+        The approved one when there is one; otherwise the latest, which is what
+        a team that never marks a quote approved will have been discussing.
+        """
+        return (self.quotes.filter(status=Quote.Status.APPROVED).first()
+                or self.quotes.first())
+
     def mark_won(self, team, user=None):
         from django.db import transaction
 
@@ -567,12 +692,16 @@ class Opportunity(models.Model):
 
         with transaction.atomic():
             previous = self.stage
-            project = Project.objects.create(
+            project = Project(
                 name=self.name,
                 description=f'Proyecto generado desde la oportunidad "{self.name}" ({self.client.name}).',
                 team=team,
                 owner=user or self.owner,
             )
+            # The project inherits what the deal promised, so what it ends up
+            # costing can be held against something.
+            project.stamp_budget(self.winning_quote)
+            project.save()
             section = Section.objects.create(name='General', project=project, order=0)
             self.tasks.update(section=section)
             self.project = project
@@ -717,6 +846,47 @@ class Quote(models.Model):
         return markup(self.subtotal, self.total_cost)
 
     @property
+    def category_totals(self):
+        """Cost, sale and margin split by kind of cost.
+
+        This is the number the evaluación spreadsheet cannot give: a blended
+        38% margin hides that the equipment carried 30% and the operating
+        expenses were quoted almost at cost. Only categories actually used
+        appear, in the order CostCategory declares them.
+        """
+        buckets = {}
+        for item in self.items.all():
+            bucket = buckets.setdefault(item.category, {'cost': Decimal('0'),
+                                                        'sale': Decimal('0')})
+            bucket['cost'] += item.cost_subtotal
+            bucket['sale'] += item.subtotal
+
+        total_cost = sum((b['cost'] for b in buckets.values()), Decimal('0'))
+        total_sale = sum((b['sale'] for b in buckets.values()), Decimal('0'))
+        labels = dict(CostCategory.choices)
+
+        rows = []
+        for category in CostCategory.values:
+            bucket = buckets.get(category)
+            if bucket is None:
+                continue
+            rows.append({
+                'category': category,
+                'label': labels[category],
+                'cost': bucket['cost'],
+                'sale': bucket['sale'],
+                'profit': bucket['sale'] - bucket['cost'],
+                'margin': markup(bucket['sale'], bucket['cost']),
+                # Share of the deal, so "where does the money go" is readable
+                # without dividing in your head.
+                'cost_share': (bucket['cost'] / total_cost).quantize(Decimal('0.0001'))
+                              if total_cost else None,
+                'sale_share': (bucket['sale'] / total_sale).quantize(Decimal('0.0001'))
+                              if total_sale else None,
+            })
+        return rows
+
+    @property
     def display_rate(self):
         """Divisor for showing the CLP figures in display_currency."""
         if self.display_currency == Currency.CLP:
@@ -743,6 +913,10 @@ class QuoteItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True,
                                related_name='quote_items')
     description = models.CharField(max_length=200)
+    #: Copied from the product when there is one, like description and price:
+    #: reclassifying the catalog later must not restate a quote already sent.
+    category = models.CharField(max_length=12, choices=CostCategory.choices,
+                                default=CostCategory.EQUIPO)
     unit = models.CharField(max_length=20, blank=True, default='unidad')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     #: Landed cost per unit at the time of quoting, copied from the catalog.
@@ -826,3 +1000,229 @@ class OpportunityActivity(models.Model):
     @property
     def is_system(self):
         return self.kind not in self.MANUAL_KINDS
+
+
+class QuoteTemplate(models.Model):
+    """The letterhead a quote wears when it leaves the company.
+
+    Deliberately separate from Quote: the numbers belong to the deal, the
+    identity and the wording belong to the company. One row per organization,
+    edited in Plantilla de cotización and read by the PDF builder.
+
+    Nothing here is ever costed — this model only decides how the figures the
+    client is allowed to see are laid out.
+    """
+
+    #: Bands the document title and the table header. Anything darker than
+    #: this reads fine with white text, which is what the PDF assumes.
+    DEFAULT_ACCENT = '#2D5F8A'
+
+    organization = models.OneToOneField(Organization, on_delete=models.CASCADE,
+                                        related_name='quote_template')
+
+    # ── Identidad ─────────────────────────────────────────────────────────
+    logo = models.ImageField(upload_to='quote_templates/', blank=True, null=True)
+    #: Legal name for the document, which may differ from the account name.
+    company_name = models.CharField(max_length=200, blank=True)
+    tax_id = models.CharField(max_length=30, blank=True)
+    address = models.CharField(max_length=200, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    email = models.EmailField(blank=True)
+    website = models.CharField(max_length=100, blank=True)
+
+    # ── Apariencia ────────────────────────────────────────────────────────
+    accent_color = models.CharField(max_length=7, default=DEFAULT_ACCENT)
+    document_title = models.CharField(max_length=60, default='COTIZACIÓN')
+
+    # ── Columnas opcionales ───────────────────────────────────────────────
+    #: Each one only removes a column; the price columns are not negotiable,
+    #: and cost and margin are not offered at all — see ClientQuoteSerializer.
+    show_item_number = models.BooleanField(default=True)
+    show_unit = models.BooleanField(default=True)
+    show_discount = models.BooleanField(default=True)
+    #: The quote's own notes field is written by whoever drafts the deal and
+    #: may hold remarks never meant for the client, so printing it is a choice
+    #: the company makes once rather than a surprise on every document.
+    show_quote_notes = models.BooleanField(default=False)
+
+    # ── Textos ────────────────────────────────────────────────────────────
+    intro_text = models.TextField(blank=True)
+    terms = models.TextField(blank=True)
+    footer_text = models.CharField(max_length=200, blank=True)
+    signature_name = models.CharField(max_length=120, blank=True)
+    signature_title = models.CharField(max_length=120, blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+
+    def __str__(self):
+        return f'Plantilla de cotización — {self.organization.name}'
+
+    @classmethod
+    def for_organization(cls, organization):
+        """The company's template, created with sane defaults on first use.
+
+        A company that never opened the editor still has to be able to send a
+        PDF, so this never returns None.
+        """
+        template, created = cls.objects.get_or_create(
+            organization=organization,
+            defaults={'company_name': organization.name},
+        )
+        return template
+
+
+class ExpenseBlock(models.TextChoices):
+    """The three groups the Gastos sheet has always used."""
+
+    VIAJE = 'viaje', 'Viaje'
+    FLETE = 'flete', 'Flete'
+    OPERACIONES = 'operaciones', 'Operaciones'
+
+
+#: What each block becomes when it is carried into a quote: the wording of the
+#: line and the kind of cost it is. Mirrors how the Cálculo sheet writes them —
+#: "Gastos operacionales para instalacion" and "Flete" as separate rows.
+BLOCK_AS_QUOTE_LINE = {
+    ExpenseBlock.VIAJE: ('Gastos de viaje', CostCategory.GASTO),
+    ExpenseBlock.FLETE: ('Flete', CostCategory.FLETE),
+    ExpenseBlock.OPERACIONES: ('Gastos operacionales', CostCategory.GASTO),
+}
+
+
+class ExpenseSheet(models.Model):
+    """The breakdown behind an operating-expense figure.
+
+    The Gastos sheet in the spreadsheet computes viáticos, freight and site
+    costs and is then read by a human who retypes the total into Cálculo — no
+    formula connects them, so the breakdown is lost the moment it is used.
+    Here the sheet is stored and the quote line is generated from it, which
+    means a figure can still be explained a year later and the next project
+    can start from the last one instead of from memory.
+
+    Cost only: what is charged for these is the quote's business, decided by
+    the margin on the line, not here.
+    """
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                                     related_name='expense_sheets')
+    opportunity = models.ForeignKey(Opportunity, on_delete=models.CASCADE,
+                                    related_name='expense_sheets')
+    name = models.CharField(max_length=200, default='Hoja de gastos')
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return f'{self.name} — {self.opportunity.name}'
+
+    @property
+    def block_totals(self):
+        """One row per block that has lines, in the order the blocks are declared.
+
+        Blocks with no lines are left out rather than shown as zero: an empty
+        Flete block means freight was not costed, not that it is free.
+        """
+        buckets = {}
+        for line in self.lines.all():
+            buckets[line.block] = buckets.get(line.block, Decimal('0')) + line.subtotal
+
+        labels = dict(ExpenseBlock.choices)
+        return [
+            {
+                'block': block,
+                'label': labels[block],
+                'total': buckets[block],
+                'quote_description': BLOCK_AS_QUOTE_LINE[block][0],
+                'category': BLOCK_AS_QUOTE_LINE[block][1],
+            }
+            for block in ExpenseBlock.values if block in buckets
+        ]
+
+    @property
+    def total(self):
+        return sum((row['total'] for row in self.block_totals), Decimal('0'))
+
+    def copy_lines_from(self, other):
+        """Start this sheet from another one — the estimate is rarely new.
+
+        Amounts come across as they were: a stale per-diem that gets corrected
+        is still a better starting point than a blank sheet.
+        """
+        ExpenseLine.objects.bulk_create([
+            ExpenseLine(sheet=self, block=line.block, description=line.description,
+                        unit_amount=line.unit_amount, quantity=line.quantity,
+                        days=line.days, order=line.order)
+            for line in other.lines.all()
+        ])
+
+
+class ExpenseLine(models.Model):
+    """One costed row: a per-unit amount, how many, and for how many days.
+
+    The sheet the team knows also had a "Fases" column; it stopped meaning
+    anything years ago and is deliberately not carried over.
+    """
+
+    sheet = models.ForeignKey(ExpenseSheet, on_delete=models.CASCADE, related_name='lines')
+    block = models.CharField(max_length=12, choices=ExpenseBlock.choices,
+                             default=ExpenseBlock.OPERACIONES)
+    description = models.CharField(max_length=200)
+    unit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    #: Days the unit is paid for — nights of lodging, days of a rented pickup.
+    #: One for anything charged per event rather than per day.
+    days = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['block', 'order', 'id']
+
+    def __str__(self):
+        return f'{self.description} — {self.subtotal}'
+
+    @property
+    def subtotal(self):
+        return (self.unit_amount * self.quantity * self.days).quantize(Decimal('0.01'))
+
+
+class ProjectExpense(models.Model):
+    """Money the company spent executing a project.
+
+    Always the company's cost, never the client's: what turns up during
+    execution — the rented pickup's tyre — is absorbed, not re-invoiced. That
+    is why there is no "billable" flag here. The sale was fixed by a document
+    the client already accepted, so every row eats into the margin the quote
+    promised.
+
+    Categorised with the same CostCategory as the quote, which is what makes
+    "presupuestamos 1.200.000 en gastos operacionales y llevamos 1.680.000" a
+    query rather than an argument.
+    """
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='expenses')
+    #: When the money was spent, which is rarely when it was recorded.
+    incurred_on = models.DateField(default=timezone.localdate)
+    category = models.CharField(max_length=12, choices=CostCategory.choices,
+                                default=CostCategory.GASTO)
+    description = models.CharField(max_length=200)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    supplier = models.CharField(max_length=200, blank=True)
+    #: Invoice or receipt number, so the row can be tied to its paper.
+    document = models.CharField(max_length=60, blank=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-incurred_on', '-id']
+
+    def __str__(self):
+        return f'{self.description} — {self.amount}'

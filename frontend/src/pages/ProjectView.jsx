@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   Plus, Check, ChevronDown, ChevronRight, Calendar, User, File,
-  Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock,
+  Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock, Wallet,
 } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
@@ -10,6 +10,7 @@ import { CSS } from '@dnd-kit/utilities'
 import api from '../api'
 import KanbanView from './KanbanView'
 import AssetsPanel from './AssetsPanel'
+import ProjectCostsPanel from './ProjectCostsPanel'
 import CompleteTaskModal from '../components/CompleteTaskModal'
 import './ProjectView.css'
 
@@ -26,7 +27,7 @@ const STATUS_CONFIG = {
   completed: { label: 'Completada', color: '#5da283' },
 }
 
-export default function ProjectView() {
+export default function ProjectView({ user }) {
   const { projectId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const [project, setProject] = useState(null)
@@ -38,6 +39,9 @@ export default function ProjectView() {
   const [newSectionName, setNewSectionName] = useState('')
   const [selectedTask, setSelectedTask] = useState(null)
   const [viewMode, setViewMode] = useState('list')
+  // What a project earns is not every team member's business; the API
+  // refuses them too, this only keeps the tab from lying about it.
+  const canSeeCosts = !!(user?.is_staff || user?.is_sales)
   const [dragActiveTask, setDragActiveTask] = useState(null)
   const [currentUser, setCurrentUser] = useState(null)
   const [showOnlyMine, setShowOnlyMine] = useState(false)
@@ -279,12 +283,19 @@ export default function ProjectView() {
             <button className={`view-btn ${viewMode === 'assets' ? 'active' : ''}`} onClick={() => setViewMode('assets')} title="Assets">
               <File size={16} />
             </button>
+            {canSeeCosts && (
+              <button className={`view-btn ${viewMode === 'costs' ? 'active' : ''}`} onClick={() => setViewMode('costs')} title="Costos">
+                <Wallet size={16} />
+              </button>
+            )}
           </div>
         </div>
         {project.description && <p className="project-description">{project.description}</p>}
       </div>
 
-      {viewMode === 'assets' ? (
+      {viewMode === 'costs' && canSeeCosts ? (
+        <ProjectCostsPanel projectId={parseInt(projectId)} />
+      ) : viewMode === 'assets' ? (
         <AssetsPanel projectId={parseInt(projectId)} />
       ) : viewMode === 'list' ? (
         <div className="project-content-wrapper">
