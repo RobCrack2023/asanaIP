@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Check, Trash2, Trophy, XCircle, FileText, Plus, ExternalLink, ChevronRight,
-  Activity, MessageSquare, Phone, Users, Mail, ArrowRight,
+  Activity, MessageSquare, Phone, Users, Mail, ArrowRight, FileDown, Wallet, Edit2,
 } from 'lucide-react'
 import api from '../api'
 import Modal from '../components/Modal'
@@ -10,6 +10,10 @@ import MonthSelect from '../components/MonthSelect'
 import CompleteTaskModal from '../components/CompleteTaskModal'
 import { formatDateTime } from '../dates'
 import { OPEN_STAGES, formatMoney } from '../stages'
+import { CATEGORIES, categoryColor, categoryShort, categoryTotals } from '../categories'
+import CategoryBreakdown from '../components/CategoryBreakdown'
+import ExpenseSheetModal from '../components/ExpenseSheetModal'
+import { blockLabel } from '../expenses'
 import { MarkWonModal, MarkLostModal } from '../components/OutcomeModals'
 import '../pages/ProjectView.css'
 import './OpportunityDetailPage.css'
@@ -48,6 +52,7 @@ export default function OpportunityDetailPage() {
   const [teams, setTeams] = useState([])
   const [products, setProducts] = useState([])
   const [activities, setActivities] = useState([])
+  const [expenseSheets, setExpenseSheets] = useState([])
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [modal, setModal] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -57,6 +62,10 @@ export default function OpportunityDetailPage() {
     api.get(`/opportunity-activities/?opportunity=${opportunityId}`)
       .then((res) => setActivities(res.data))
 
+  const loadExpenseSheets = () =>
+    api.get(`/expense-sheets/?opportunity=${opportunityId}`)
+      .then((res) => setExpenseSheets(res.data))
+
   const load = () => {
     setLoadError(null)
     api.get(`/opportunities/${opportunityId}/`)
@@ -64,6 +73,7 @@ export default function OpportunityDetailPage() {
       .catch(() => setLoadError('No tenés acceso a esta oportunidad o no existe.'))
     api.get(`/tasks/?opportunity=${opportunityId}`).then((res) => setTasks(res.data))
     loadActivities()
+    loadExpenseSheets()
   }
 
   useEffect(() => {
@@ -129,6 +139,12 @@ export default function OpportunityDetailPage() {
   const addQuote = async (data) => {
     const res = await api.post('/quotes/', { ...data, opportunity: Number(opportunityId) })
     setOpportunity((prev) => ({ ...prev, quotes: [res.data, ...prev.quotes] }))
+  }
+
+  const deleteExpenseSheet = async (sheet) => {
+    if (!confirm(`¿Eliminar "${sheet.name}"? Las cotizaciones ya armadas con ella no cambian.`)) return
+    await api.delete(`/expense-sheets/${sheet.id}/`)
+    loadExpenseSheets()
   }
 
   const deleteQuote = async (quote) => {
@@ -251,6 +267,32 @@ export default function OpportunityDetailPage() {
 
       <div className="opp-section">
         <div className="opp-section-header">
+          <h2><Wallet size={15} /> Hojas de gastos</h2>
+          <button className="opp-add-btn" onClick={() => setModal({ type: 'expenses' })}>
+            <Plus size={13} /> Nueva hoja
+          </button>
+        </div>
+        {expenseSheets.length === 0 ? (
+          <div className="opp-empty-block">
+            Sin hojas de gastos. Aquí se desglosan viajes, fletes y operaciones
+            antes de llevarlos a la cotización.
+          </div>
+        ) : (
+          <div className="opp-expense-list">
+            {expenseSheets.map((sheet) => (
+              <ExpenseSheetCard
+                key={sheet.id}
+                sheet={sheet}
+                onEdit={() => setModal({ type: 'expenses', sheet })}
+                onDelete={() => deleteExpenseSheet(sheet)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="opp-section">
+        <div className="opp-section-header">
           <h2><FileText size={15} /> Cotizaciones</h2>
           <button className="opp-add-btn" onClick={() => setModal({ type: 'quote' })}>
             <Plus size={13} /> Nueva cotización
@@ -337,7 +379,65 @@ export default function OpportunityDetailPage() {
         <MarkLostModal onClose={() => setModal(null)} onConfirm={markLost} />
       )}
       {modal?.type === 'quote' && (
-        <QuoteFormModal products={products} onClose={() => setModal(null)} onSaved={addQuote} />
+        <QuoteFormModal
+          products={products}
+          expenseSheets={expenseSheets}
+          onClose={() => setModal(null)}
+          onSaved={addQuote}
+        />
+      )}
+      {modal?.type === 'expenses' && (
+        <ExpenseSheetModal
+          opportunityId={Number(opportunityId)}
+          sheet={modal.sheet}
+          sheets={expenseSheets.filter((s) => s.id !== modal.sheet?.id)}
+          onClose={() => setModal(null)}
+          onSaved={loadExpenseSheets}
+        />
+      )}
+    </div>
+  )
+}
+
+/** A saved expense sheet: its blocks, and the detail behind them. */
+function ExpenseSheetCard({ sheet, onEdit, onDelete }) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="opp-expense-card">
+      <div className="opp-expense-row" onClick={() => setExpanded((v) => !v)}>
+        <ChevronRight size={14} className={`opp-quote-chevron ${expanded ? 'open' : ''}`} />
+        <span className="opp-expense-name">{sheet.name}</span>
+        <span className="opp-expense-blocks">
+          {sheet.block_totals.map((row) => (
+            <span key={row.block}>{row.label} {formatMoney(row.total)}</span>
+          ))}
+        </span>
+        <span className="opp-expense-total">{formatMoney(sheet.total)}</span>
+        <div className="opp-expense-actions">
+          <button title="Editar" onClick={(e) => { e.stopPropagation(); onEdit() }}>
+            <Edit2 size={13} />
+          </button>
+          <button className="danger" title="Eliminar" onClick={(e) => { e.stopPropagation(); onDelete() }}>
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="opp-expense-detail">
+          {sheet.lines.map((line) => (
+            <div key={line.id} className="opp-expense-detail-line">
+              <span className="oed-block">{blockLabel(line.block)}</span>
+              <span>{line.description}</span>
+              <span className="oed-driver">
+                {formatMoney(line.unit_amount)} × {Number(line.quantity)} × {Number(line.days)}d
+              </span>
+              <span>{formatMoney(line.subtotal)}</span>
+            </div>
+          ))}
+          {sheet.notes && <p className="opp-expense-notes">{sheet.notes}</p>}
+        </div>
       )}
     </div>
   )
@@ -443,6 +543,12 @@ function QuoteCard({ quote, onDelete }) {
       ? formatMoney(amount)
       : `${currency} ${(Number(amount || 0) / rate).toLocaleString('es-CL', { maximumFractionDigits: 2 })}`
 
+  // The split comes computed from the server; only the colour is a front-end
+  // concern, so it is the one thing added here.
+  const breakdown = (quote.category_totals || []).map((row) => ({
+    ...row, color: categoryColor(row.category),
+  }))
+
   const formatDate = (value) =>
     value ? new Date(`${value}T00:00:00`).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
 
@@ -464,19 +570,29 @@ function QuoteCard({ quote, onDelete }) {
         {quote.is_expired && <span className="opp-quote-expired">Vencida</span>}
         <span className="opp-quote-date">{formatDate(quote.issue_date)}</span>
         {quote.notes && <span className="opp-quote-notes">{quote.notes}</span>}
-        <button
-          className="opp-quote-delete"
-          title="Eliminar cotización"
-          onClick={(e) => { e.stopPropagation(); onDelete() }}
-        >
-          <Trash2 size={13} />
-        </button>
+        <div className="opp-quote-actions">
+          <button
+            className="opp-quote-pdf"
+            title="PDF para el cliente — sin costos ni márgenes"
+            onClick={(e) => { e.stopPropagation(); window.open(`/api/quotes/${quote.id}/pdf/`, '_blank') }}
+          >
+            <FileDown size={13} />
+          </button>
+          <button
+            className="opp-quote-delete"
+            title="Eliminar cotización"
+            onClick={(e) => { e.stopPropagation(); onDelete() }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
       </div>
 
       {expanded && (
         <div className="opp-quote-detail">
           <div className="quote-items-head">
             <span>Descripción</span>
+            <span>Categoría</span>
             <span>Cant.</span>
             <span>Costo unit.</span>
             <span>Margen</span>
@@ -487,6 +603,10 @@ function QuoteCard({ quote, onDelete }) {
           {items.map((item) => (
             <div key={item.id} className="quote-detail-row">
               <span>{item.description}</span>
+              <span className="cat-badge">
+                <i className="cat-dot" style={{ background: categoryColor(item.category) }} />
+                {categoryShort(item.category)}
+              </span>
               <span>{Number(item.quantity)}</span>
               <span className="qd-cost">{show(item.unit_cost)}</span>
               <span className="qd-cost">{formatMargin(item.margin)}</span>
@@ -513,6 +633,8 @@ function QuoteCard({ quote, onDelete }) {
               <span>Total</span><strong>{show(quote.total_amount)}</strong>
             </div>
           </div>
+          <CategoryBreakdown rows={breakdown} money={show} />
+
           <div className="quote-detail-validity">
             Válida hasta: {formatDate(quote.valid_until)}
             {currency !== 'CLP' && ` · convertido a ${currency} a ${formatMoney(rate)}`}
@@ -523,7 +645,8 @@ function QuoteCard({ quote, onDelete }) {
   )
 }
 
-const emptyItem = () => ({ product: null, description: '', quantity: '1', unit_cost: '', margin: '', unit_price: '', discount_percent: '' })
+const emptyItem = () => ({ product: null, description: '', category: 'equipo', quantity: '1',
+                           unit_cost: '', margin: '', unit_price: '', discount_percent: '' })
 
 // Margin drives the price on any line that has a cost; a line without one
 // (a service, a pass-through) simply states its price.
@@ -545,7 +668,7 @@ const itemSubtotal = (item) => {
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-function QuoteFormModal({ products = [], onClose, onSaved }) {
+function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved }) {
   const [status, setStatus] = useState('draft')
   const [items, setItems] = useState([emptyItem()])
   const [notes, setNotes] = useState('')
@@ -559,6 +682,9 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
   // Mirrors what the server will compute, so the figures never disagree.
   const subtotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0)
   const totalCost = items.reduce((sum, item) => sum + itemCost(item), 0)
+  // Same split the server will report once the quote is saved, computed here
+  // so the composition is visible while the price is still being decided.
+  const breakdown = categoryTotals(items, { cost: itemCost, sale: itemSubtotal })
   const profit = subtotal - totalCost
   const margin = totalCost ? subtotal / totalCost - 1 : null
   const taxAmount = subtotal * (Number(taxRate) || 0) / 100
@@ -571,6 +697,27 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
 
   // Picking from the catalog copies the price in — the quote keeps its own
   // snapshot, so later catalog changes never rewrite an existing quote.
+  // One line per block, the way the Cálculo sheet writes them: "Gastos
+  // operacionales" and "Flete" as separate rows, not one lump. The margin is
+  // left blank on purpose — what to charge for a gasto is a decision, and the
+  // sheet only knows the cost.
+  const addFromExpenseSheet = (sheetId) => {
+    const sheet = expenseSheets.find((s) => String(s.id) === String(sheetId))
+    if (!sheet) return
+    const lines = sheet.block_totals.map((row) => ({
+      ...emptyItem(),
+      description: `${row.quote_description} — ${sheet.name}`,
+      category: row.category,
+      unit_cost: String(row.total),
+      margin: '20',
+    }))
+    if (!lines.length) return
+    setItems((prev) => {
+      const kept = prev.filter((item) => item.description || Number(item.unit_cost))
+      return [...kept, ...lines]
+    })
+  }
+
   const addFromCatalog = (productId) => {
     const product = products.find((p) => String(p.id) === productId)
     if (!product) return
@@ -579,6 +726,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
       description: product.name,
       unit: product.unit || 'unidad',
       quantity: '1',
+      category: product.category || 'equipo',
       unit_cost: String(product.cost ?? ''),
       margin: String(Number(product.default_margin ?? 0) * 100),
       unit_price: String(product.unit_price ?? ''),
@@ -619,6 +767,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
           description: item.description.trim(),
           unit: item.unit || 'unidad',
           quantity: Number(item.quantity),
+          category: item.category,
           unit_cost: Number(item.unit_cost) || 0,
           // Costed lines send the margin and let the server price them;
           // uncosted ones send the price they were given.
@@ -651,6 +800,7 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
           <div className="quote-items">
             <div className="quote-items-head">
               <span>Descripción</span>
+              <span>Categoría</span>
               <span>Cant.</span>
               <span>Costo unit.</span>
               <span>Margen %</span>
@@ -667,6 +817,15 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
                   placeholder="Ej: Bomba centrífuga 5 HP"
                   autoFocus={index === 0}
                 />
+                <select
+                  className="quote-category-select"
+                  value={item.category}
+                  onChange={(e) => updateItem(index, 'category', e.target.value)}
+                >
+                  {CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>{c.short}</option>
+                  ))}
+                </select>
                 <input
                   type="number"
                   min="0"
@@ -729,6 +888,20 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
             <button type="button" className="field-link" onClick={addItem}>
               <Plus size={12} /> Agregar línea
             </button>
+            {expenseSheets.length > 0 && (
+              <select
+                className="quote-catalog-picker"
+                value=""
+                onChange={(e) => { addFromExpenseSheet(e.target.value); e.target.value = '' }}
+              >
+                <option value="">Traer de una hoja de gastos...</option>
+                {expenseSheets.map((sheet) => (
+                  <option key={sheet.id} value={sheet.id}>
+                    {sheet.name} ({formatMoney(sheet.total)})
+                  </option>
+                ))}
+              </select>
+            )}
             {products.length > 0 && (
               <select
                 className="quote-catalog-picker"
@@ -779,6 +952,8 @@ function QuoteFormModal({ products = [], onClose, onSaved }) {
             <span>Total</span>
             <strong>{formatMoney(total)}</strong>
           </div>
+
+          <CategoryBreakdown rows={breakdown} money={formatMoney} />
         </div>
 
         <div className="form-row">

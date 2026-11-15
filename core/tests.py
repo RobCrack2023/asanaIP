@@ -3,8 +3,8 @@ from decimal import Decimal
 from rest_framework.test import APITestCase
 
 from .models import (
-    Area, Client, ExchangeRate, Opportunity, OpportunityActivity, Organization,
-    Product, ProductPriceEntry, Quote, QuoteItem, Team, User,
+    Area, Client, ExchangeRate, ExpenseSheet, Opportunity, OpportunityActivity,
+    Organization, Product, ProductPriceEntry, Project, Quote, QuoteItem, Team, User,
 )
 
 
@@ -738,3 +738,541 @@ class QuoteLinePricingTests(APITestCase):
         # Quoted at 1.8, but 20% off the price leaves 1.24 actually earned.
         self.assertEqual(str(item['margin']), '1.8000')
         self.assertEqual(str(item['effective_margin']), '1.2400')
+
+
+class ClientFacingQuoteTests(APITestCase):
+    """What leaves the company, and what must never leave with it."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.admin = User.objects.create_user(
+            username='jefa', password='secret', organization=self.org, is_staff=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Agrícola Los Nogales')
+        opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Estación meteorológica',
+        )
+        response = self.client.post('/api/quotes/', {
+            'opportunity': opportunity.id,
+            'issue_date': '2026-08-26',
+            'items': [{
+                'description': 'Datalogger CR310', 'quantity': 1,
+                'unit_cost': '1457536', 'margin': '0.35',
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.quote = Quote.objects.get(pk=response.data['id'])
+
+    def test_the_client_payload_carries_no_cost_margin_or_profit(self):
+        response = self.client.get(f'/api/quotes/{self.quote.id}/client-view/')
+
+        quote = response.data['quote']
+        self.assertNotIn('total_cost', quote)
+        self.assertNotIn('total_profit', quote)
+        self.assertNotIn('margin', quote)
+        for field in ('unit_cost', 'margin', 'cost_subtotal', 'profit', 'effective_margin'):
+            self.assertNotIn(field, quote['items'][0])
+
+    def test_the_client_payload_still_carries_the_prices(self):
+        response = self.client.get(f'/api/quotes/{self.quote.id}/client-view/')
+
+        quote = response.data['quote']
+        self.assertEqual(str(quote['items'][0]['unit_price']), '1967673.60')
+        self.assertEqual(str(quote['total_amount']), '2341531.58')
+        self.assertEqual(quote['client_name'], 'Agrícola Los Nogales')
+
+    def test_the_pdf_never_prints_the_landed_cost(self):
+        """The figure 1.457.536 is in the quote; it must not be in the file."""
+        response = self.client.get(f'/api/quotes/{self.quote.id}/pdf/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertTrue(response.content.startswith(b'%PDF'))
+        # Text is compressed inside the PDF, so assert on the source instead:
+        # nothing but ClientQuoteSerializer can reach the builder.
+        self.assertNotIn('unit_cost', str(response.content))
+
+    def test_another_company_cannot_reach_the_pdf(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        User.objects.create_user(username='intruso', password='secret',
+                                 organization=other, is_sales=True)
+        self.client.logout()
+        self.client.login(username='intruso', password='secret')
+
+        response = self.client.get(f'/api/quotes/{self.quote.id}/pdf/')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_template_is_created_on_first_read(self):
+        response = self.client.get('/api/quote-template/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['document_title'], 'COTIZACIÓN')
+        # Printing the quote's own notes is opt-in: they may be internal.
+        self.assertFalse(response.data['show_quote_notes'])
+
+    def test_sales_may_read_the_template_but_not_change_it(self):
+        response = self.client.patch('/api/quote-template/',
+                                     {'company_name': 'Otra'}, format='json')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_may_change_the_template(self):
+        self.client.logout()
+        self.client.login(username='jefa', password='secret')
+
+        response = self.client.patch('/api/quote-template/', {
+            'company_name': 'Ingeniería y Proyectos LTDA', 'accent_color': '#1a3f6b',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['company_name'], 'Ingeniería y Proyectos LTDA')
+        self.assertEqual(response.data['accent_color'], '#1A3F6B')
+
+    def test_a_broken_colour_is_refused(self):
+        self.client.logout()
+        self.client.login(username='jefa', password='secret')
+
+        response = self.client.patch('/api/quote-template/',
+                                     {'accent_color': 'azul'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+
+class CostCategoryTests(APITestCase):
+    """Equipment, own labour and operating expenses, told apart."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Agrícola Los Nogales')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Estación meteorológica',
+        )
+
+    def _product(self, **extra):
+        payload = {'name': 'Ficha', 'default_margin': '0.3', 'cost_amount': '100000'}
+        payload.update(extra)
+        response = self.client.post('/api/products/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def _quote(self, items):
+        return self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id, 'issue_date': '2026-08-26', 'items': items,
+        }, format='json')
+
+    def test_a_catalog_entry_is_equipment_unless_it_says_otherwise(self):
+        product = self._product(name='Datalogger CR310')
+
+        self.assertEqual(product['category'], 'equipo')
+        self.assertEqual(product['category_display'], 'Equipo o material')
+
+    def test_an_expense_is_a_catalog_entry_like_any_other(self):
+        """The Cálculo sheet keeps "Gastos operacionales" in the same list."""
+        product = self._product(name='Gastos operacionales para instalación',
+                                category='gasto', default_margin='0.2')
+
+        self.assertEqual(product['category'], 'gasto')
+        # Priced the same way: cost marked up, price derived.
+        self.assertEqual(str(product['unit_price']), '120000.00')
+
+    def test_a_quoted_line_inherits_the_category_of_its_product(self):
+        product = self._product(name='Flete a terreno', category='flete')
+
+        response = self._quote([{
+            'product': product['id'], 'description': 'Flete a terreno',
+            'quantity': 1, 'unit_cost': '100000', 'margin': '0.2',
+        }])
+
+        self.assertEqual(response.data['items'][0]['category'], 'flete')
+
+    def test_a_line_may_override_the_category_it_inherited(self):
+        product = self._product(name='Flete a terreno', category='flete')
+
+        response = self._quote([{
+            'product': product['id'], 'description': 'Flete a terreno',
+            'category': 'gasto', 'quantity': 1, 'unit_cost': '100000', 'margin': '0.2',
+        }])
+
+        self.assertEqual(response.data['items'][0]['category'], 'gasto')
+
+    def test_the_breakdown_splits_cost_sale_and_margin_by_category(self):
+        """The reading the spreadsheet cannot give: a blended margin, opened up."""
+        response = self._quote([
+            {'description': 'Datalogger', 'category': 'equipo',
+             'quantity': 1, 'unit_cost': '1000000', 'margin': '0.3'},
+            {'description': 'Instalación', 'category': 'servicio',
+             'quantity': 1, 'unit_cost': '500000', 'margin': '1.8'},
+            {'description': 'Gastos operacionales', 'category': 'gasto',
+             'quantity': 1, 'unit_cost': '500000', 'margin': '0.2'},
+        ])
+
+        rows = {row['category']: row for row in response.data['category_totals']}
+        self.assertEqual(list(rows), ['equipo', 'servicio', 'gasto'])
+        self.assertEqual(str(rows['equipo']['cost']), '1000000.00')
+        self.assertEqual(str(rows['equipo']['margin']), '0.3000')
+        self.assertEqual(str(rows['servicio']['margin']), '1.8000')
+        self.assertEqual(str(rows['gasto']['margin']), '0.2000')
+        # Half the cost is equipment, a quarter each for labour and expenses.
+        self.assertEqual(str(rows['equipo']['cost_share']), '0.5000')
+        self.assertEqual(str(rows['gasto']['cost_share']), '0.2500')
+        # And the blended margin the totals report is none of the three.
+        self.assertEqual(str(response.data['margin']), '0.6500')
+
+    def test_the_breakdown_only_lists_categories_actually_used(self):
+        response = self._quote([
+            {'description': 'Datalogger', 'quantity': 1, 'unit_cost': '1000000', 'margin': '0.3'},
+        ])
+
+        self.assertEqual([row['category'] for row in response.data['category_totals']],
+                         ['equipo'])
+
+    def test_the_category_stays_out_of_the_client_document(self):
+        """How the company classifies its costs is not the client's business."""
+        created = self._quote([
+            {'description': 'Gastos operacionales', 'category': 'gasto',
+             'quantity': 1, 'unit_cost': '500000', 'margin': '0.2'},
+        ])
+
+        response = self.client.get(f'/api/quotes/{created.data["id"]}/client-view/')
+
+        quote = response.data['quote']
+        self.assertNotIn('category_totals', quote)
+        self.assertNotIn('category', quote['items'][0])
+
+    def test_reclassifying_the_catalog_leaves_sent_quotes_alone(self):
+        product = self._product(name='Flete a terreno', category='flete')
+        created = self._quote([{
+            'product': product['id'], 'description': 'Flete a terreno',
+            'quantity': 1, 'unit_cost': '100000', 'margin': '0.2',
+        }])
+
+        self.client.patch(f'/api/products/{product["id"]}/',
+                          {'category': 'gasto'}, format='json')
+
+        response = self.client.get(f'/api/quotes/{created.data["id"]}/')
+        self.assertEqual(response.data['items'][0]['category'], 'flete')
+
+
+class ExpenseSheetTests(APITestCase):
+    """The breakdown behind an operating-expense figure."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Agrícola Los Nogales')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Estación meteorológica',
+        )
+
+    def _sheet(self, lines=None, **extra):
+        payload = {
+            'opportunity': self.opportunity.id,
+            'name': 'Gastos instalación',
+            'lines': lines if lines is not None else [
+                {'block': 'viaje', 'description': 'Alojamiento',
+                 'unit_amount': '55000', 'quantity': '2', 'days': '3'},
+                {'block': 'operaciones', 'description': 'Prevencionista',
+                 'unit_amount': '180000', 'quantity': '1', 'days': '2'},
+                {'block': 'flete', 'description': 'Flete a terreno',
+                 'unit_amount': '450000', 'quantity': '1', 'days': '1'},
+            ],
+        }
+        payload.update(extra)
+        return self.client.post('/api/expense-sheets/', payload, format='json')
+
+    def test_a_line_costs_unit_times_quantity_times_days(self):
+        """55.000 la noche, dos personas, tres noches."""
+        response = self._sheet(lines=[{
+            'block': 'viaje', 'description': 'Alojamiento',
+            'unit_amount': '55000', 'quantity': '2', 'days': '3',
+        }])
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(str(response.data['lines'][0]['subtotal']), '330000.00')
+
+    def test_a_one_off_expense_needs_no_days(self):
+        """Days default to one, so a flat charge is not multiplied by anything."""
+        response = self._sheet(lines=[{
+            'block': 'flete', 'description': 'Flete a terreno', 'unit_amount': '450000',
+        }])
+
+        self.assertEqual(str(response.data['lines'][0]['subtotal']), '450000.00')
+
+    def test_the_sheet_totals_by_block(self):
+        response = self._sheet()
+
+        rows = {row['block']: row for row in response.data['block_totals']}
+        self.assertEqual([row['block'] for row in response.data['block_totals']],
+                         ['viaje', 'flete', 'operaciones'])
+        self.assertEqual(str(rows['viaje']['total']), '330000.00')
+        self.assertEqual(str(rows['operaciones']['total']), '360000.00')
+        self.assertEqual(str(response.data['total']), '1140000.00')
+
+    def test_an_empty_block_is_left_out_rather_than_shown_as_zero(self):
+        """No Flete lines means freight was not costed, not that it is free."""
+        response = self._sheet(lines=[{
+            'block': 'viaje', 'description': 'Viáticos', 'unit_amount': '35000',
+        }])
+
+        self.assertEqual([row['block'] for row in response.data['block_totals']], ['viaje'])
+
+    def test_each_block_says_what_quote_line_it_becomes(self):
+        """Cálculo writes them as separate rows, not one lump."""
+        response = self._sheet()
+
+        rows = {row['block']: row for row in response.data['block_totals']}
+        self.assertEqual(rows['viaje']['quote_description'], 'Gastos de viaje')
+        self.assertEqual(rows['viaje']['category'], 'gasto')
+        self.assertEqual(rows['flete']['quote_description'], 'Flete')
+        self.assertEqual(rows['flete']['category'], 'flete')
+        self.assertEqual(rows['operaciones']['category'], 'gasto')
+
+    def test_a_new_sheet_can_start_from_an_old_one(self):
+        source = self._sheet()
+
+        response = self.client.post('/api/expense-sheets/', {
+            'opportunity': self.opportunity.id,
+            'name': 'Próximo proyecto',
+            'copy_from': source.data['id'],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(response.data['lines']), 3)
+        self.assertEqual(str(response.data['total']), '1140000.00')
+        # A copy, not a shared reference: editing one must not touch the other.
+        self.assertNotEqual(response.data['lines'][0]['id'], source.data['lines'][0]['id'])
+
+    def test_editing_a_sheet_replaces_its_lines(self):
+        sheet = self._sheet()
+
+        response = self.client.patch(f'/api/expense-sheets/{sheet.data["id"]}/', {
+            'lines': [{'block': 'viaje', 'description': 'Pasajes',
+                       'unit_amount': '85000', 'quantity': '2', 'days': '2'}],
+        }, format='json')
+
+        self.assertEqual(len(response.data['lines']), 1)
+        self.assertEqual(str(response.data['total']), '340000.00')
+
+    def test_a_line_with_zero_days_is_refused(self):
+        response = self._sheet(lines=[{
+            'block': 'viaje', 'description': 'Alojamiento',
+            'unit_amount': '55000', 'quantity': '1', 'days': '0',
+        }])
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_a_sheet_cannot_be_hung_on_another_company_opportunity(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        client_b = Client.objects.create(organization=other, name='Otro')
+        theirs = Opportunity.objects.create(organization=other, client=client_b, name='Suya')
+
+        response = self._sheet(opportunity=theirs.id)
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_another_company_cannot_read_the_sheet(self):
+        sheet = self._sheet()
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        User.objects.create_user(username='intruso', password='secret',
+                                 organization=other, is_sales=True)
+        self.client.logout()
+        self.client.login(username='intruso', password='secret')
+
+        response = self.client.get(f'/api/expense-sheets/{sheet.data["id"]}/')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_deleting_the_sheet_leaves_the_quote_it_produced_alone(self):
+        """The quote copied a number; it does not read the sheet."""
+        sheet = self._sheet()
+        quote = self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'items': [{'description': 'Gastos operacionales', 'category': 'gasto',
+                       'quantity': 1, 'unit_cost': '360000', 'margin': '0.2'}],
+        }, format='json')
+
+        self.client.delete(f'/api/expense-sheets/{sheet.data["id"]}/')
+
+        response = self.client.get(f'/api/quotes/{quote.data["id"]}/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(str(response.data['items'][0]['unit_cost']), '360000.00')
+        self.assertFalse(ExpenseSheet.objects.exists())
+
+
+class ProjectExpenseTests(APITestCase):
+    """What execution actually cost, against what the deal promised."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org,
+            is_sales=True, first_name='Ana', last_name='Soto',
+        )
+        self.area = Area.objects.create(name='Proyectos', organization=self.org)
+        self.team = Team.objects.create(name='Terreno', area=self.area)
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Agrícola Los Nogales')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Estación meteorológica',
+        )
+        # Equipos 1.000.000 al 30% y gastos 500.000 al 20%: costo 1.500.000,
+        # venta 1.900.000.
+        self.quote = self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'status': 'approved',
+            'items': [
+                {'description': 'Datalogger', 'category': 'equipo',
+                 'quantity': 1, 'unit_cost': '1000000', 'margin': '0.3'},
+                {'description': 'Gastos operacionales', 'category': 'gasto',
+                 'quantity': 1, 'unit_cost': '500000', 'margin': '0.2'},
+            ],
+        }, format='json').data
+
+    def _win(self):
+        response = self.client.post(f'/api/opportunities/{self.opportunity.id}/mark_won/',
+                                    {'team_id': self.team.id}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        return Project.objects.get(pk=response.data['project'])
+
+    def _expense(self, **extra):
+        payload = {'project': self.project.id, 'description': 'Neumático camioneta',
+                   'category': 'flete', 'amount': '185000'}
+        payload.update(extra)
+        return self.client.post('/api/project-expenses/', payload, format='json')
+
+    def test_winning_stamps_what_the_deal_promised(self):
+        project = self._win()
+
+        self.assertEqual(str(project.budget_cost), '1500000.00')
+        self.assertEqual(str(project.budget_sale), '1900000.00')
+        self.assertEqual([row['category'] for row in project.budget_categories],
+                         ['equipo', 'gasto'])
+
+    def test_editing_the_quote_afterwards_does_not_move_the_yardstick(self):
+        """The project was sold on a document; changing it later proves nothing."""
+        project = self._win()
+
+        self.client.patch(f'/api/quotes/{self.quote["id"]}/', {
+            'items': [{'description': 'Datalogger', 'category': 'equipo',
+                       'quantity': 1, 'unit_cost': '9000000', 'margin': '0.3'}],
+        }, format='json')
+
+        project.refresh_from_db()
+        self.assertEqual(str(project.budget_cost), '1500000.00')
+
+    def test_the_latest_quote_is_used_when_none_is_approved(self):
+        Quote.objects.update(status='sent')
+        self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'items': [{'description': 'Revisada', 'quantity': 1,
+                       'unit_cost': '2000000', 'margin': '0.5'}],
+        }, format='json')
+
+        project = self._win()
+
+        self.assertEqual(str(project.budget_cost), '2000000.00')
+
+    def test_an_expense_lands_on_top_of_the_budget_not_instead_of_it(self):
+        """Nobody re-enters the datalogger they already quoted."""
+        self.project = self._win()
+        self._expense(amount='185000')
+        self._expense(description='Noche extra', category='gasto', amount='55000')
+
+        summary = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+
+        self.assertEqual(str(summary['extra_cost']), '240000.00')
+        self.assertEqual(str(summary['real_cost']), '1740000.00')
+
+    def test_the_margin_falls_while_the_sale_stays_put(self):
+        self.project = self._win()
+        self._expense(amount='240000')
+
+        summary = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+
+        # Quoted 1.500.000 of cost against a sale of 1.900.000.
+        self.assertEqual(str(summary['quoted_margin']), '0.2667')
+        self.assertEqual(str(summary['quoted_profit']), '400000.00')
+        # The client accepted a document, so the 240.000 comes out of profit.
+        self.assertEqual(str(summary['real_margin']), '0.0920')
+        self.assertEqual(str(summary['real_profit']), '160000.00')
+        self.assertEqual(str(summary['budget_sale']), '1900000.00')
+
+    def test_costs_are_compared_on_the_categories_the_deal_was_priced_with(self):
+        self.project = self._win()
+        self._expense(description='Noche extra', category='gasto', amount='180000')
+
+        summary = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+
+        rows = {row['category']: row for row in summary['by_category']}
+        self.assertEqual(str(rows['gasto']['budget']), '500000.00')
+        self.assertEqual(str(rows['gasto']['extra']), '180000.00')
+        self.assertEqual(str(rows['gasto']['real']), '680000.00')
+        # A category with nothing extra still shows what it was budgeted at.
+        self.assertEqual(str(rows['equipo']['extra']), '0.00')
+        self.assertEqual(str(rows['equipo']['real']), '1000000.00')
+
+    def test_an_unbudgeted_category_still_appears(self):
+        """A tyre nobody quoted for is exactly what this has to surface."""
+        self.project = self._win()
+        self._expense(category='flete', amount='185000')
+
+        summary = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+
+        rows = {row['category']: row for row in summary['by_category']}
+        self.assertEqual(str(rows['flete']['budget']), '0.00')
+        self.assertEqual(str(rows['flete']['extra']), '185000.00')
+        self.assertEqual(str(rows['flete']['real']), '185000.00')
+
+    def test_an_expense_of_zero_is_refused(self):
+        self.project = self._win()
+
+        response = self._expense(amount='0')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_expense_records_who_entered_it(self):
+        self.project = self._win()
+
+        response = self._expense()
+
+        self.assertEqual(response.data['recorded_by_name'], 'Ana Soto')
+
+    def test_a_team_member_cannot_read_what_the_project_earns(self):
+        """Everyone on the team can open the project; the margin is not theirs."""
+        self.project = self._win()
+        member = User.objects.create_user(username='tecnico', password='secret',
+                                          organization=self.org)
+        self.team.members.add(member)
+        self.client.logout()
+        self.client.login(username='tecnico', password='secret')
+
+        response = self.client.get(f'/api/projects/{self.project.id}/costs/')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_an_expense_cannot_be_hung_on_another_company_project(self):
+        self.project = self._win()
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        their_area = Area.objects.create(name='Suya', organization=other)
+        their_team = Team.objects.create(name='Suyo', area=their_area)
+        theirs = Project.objects.create(name='Proyecto ajeno', team=their_team)
+
+        response = self._expense(project=theirs.id)
+
+        self.assertEqual(response.status_code, 400)

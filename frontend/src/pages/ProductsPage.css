@@ -85,8 +85,40 @@
 .pt-col-actions { width: 160px; min-width: 160px; display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 
 .pt-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13px;
   font-weight: 500;
+}
+
+/* What kind of cost the entry is. A gasto operacional sits in the same
+   catalog as a datalogger, so the list has to say which is which. */
+.pt-category {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.products-category-filter {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.products-category-filter:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .pt-description {

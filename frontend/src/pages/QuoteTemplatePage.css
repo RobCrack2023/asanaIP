@@ -1,0 +1,444 @@
+.quote-template-page {
+  padding: 32px 40px;
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.qt-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.qt-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.qt-header p {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.qt-header .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qt-readonly {
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #faf9f8;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* Form on the left, the document on the right — wide enough for A4 at a
+   readable size, and the paper follows as the form scrolls. */
+.qt-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  padding-bottom: 40px;
+}
+
+.qt-form section {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.qt-form section h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.qt-form .modal-field {
+  margin-bottom: 12px;
+}
+
+.qt-form .modal-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+
+.qt-form input[type='text'],
+.qt-form .modal-field input,
+.qt-form .modal-field textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.qt-form .modal-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.qt-form .modal-field input:focus,
+.qt-form .modal-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.qt-form .modal-field input:disabled,
+.qt-form .modal-field textarea:disabled {
+  background: #f7f6f5;
+  color: var(--text-secondary);
+}
+
+.qt-form .form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.qt-form .form-row .modal-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.qt-hint {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.qt-logo-row {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.qt-logo-box {
+  width: 96px;
+  height: 62px;
+  flex-shrink: 0;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background: #faf9f8;
+  overflow: hidden;
+}
+
+.qt-logo-box img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.qt-logo-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.qt-logo-actions .btn {
+  cursor: pointer;
+}
+
+.qt-logo-clear {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.qt-color {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.qt-color input[type='color'] {
+  width: 38px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.qt-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.qt-check input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.qt-check em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Vista previa ────────────────────────────────────────────────────── */
+
+.qt-preview {
+  position: sticky;
+  top: 32px;
+}
+
+.qt-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.qt-preview-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.qt-preview-link:hover {
+  text-decoration: underline;
+}
+
+.qt-preview-paper {
+  background: #f3f2f1;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 22px;
+  max-height: calc(100vh - 130px);
+  overflow-y: auto;
+}
+
+/* The A4 sheet. Proportions follow core/quote_pdf.py so the preview and the
+   file the client opens read the same. */
+.qt-doc {
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+  padding: 30px 34px 20px;
+  font-size: 11px;
+  color: #333;
+  line-height: 1.45;
+}
+
+.qt-doc-letterhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.qt-doc-logo img {
+  max-width: 150px;
+  max-height: 62px;
+  object-fit: contain;
+}
+
+.qt-doc-logo-empty {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #c4c4c4;
+}
+
+.qt-doc-company {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  font-size: 9.5px;
+  color: #666;
+}
+
+.qt-doc-company strong {
+  font-size: 10.5px;
+  color: #333;
+}
+
+.qt-doc-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 13px;
+  color: #fff;
+  margin-bottom: 18px;
+}
+
+.qt-doc-band-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.qt-doc-band-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 10px;
+}
+
+.qt-doc-parties {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.qt-doc-parties > div {
+  display: flex;
+  flex-direction: column;
+  max-width: 48%;
+}
+
+.qt-doc-intro {
+  white-space: pre-wrap;
+  margin-bottom: 14px;
+}
+
+.qt-doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+
+.qt-doc-table th {
+  color: #fff;
+  font-weight: 600;
+  font-size: 10px;
+  text-align: left;
+  padding: 6px 7px;
+}
+
+.qt-doc-table td {
+  padding: 6px 7px;
+  border-bottom: 1px solid #e9e9e9;
+  font-size: 10.5px;
+}
+
+.qt-doc-table tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.qt-doc-table .c { text-align: center; }
+.qt-doc-table .r { text-align: right; }
+
+.qt-doc-totals {
+  margin-left: auto;
+  width: 52%;
+  font-size: 10.5px;
+}
+
+.qt-doc-totals > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 7px;
+}
+
+.qt-doc-totals .grand {
+  border-top: 2px solid;
+  background: #f2f2f2;
+  font-weight: 700;
+}
+
+.qt-doc-note {
+  font-size: 9.5px;
+  color: #777;
+  margin-top: 8px;
+}
+
+.qt-doc-section {
+  margin-top: 16px;
+}
+
+.qt-doc-section h4 {
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.qt-doc-section p {
+  font-size: 10px;
+  color: #555;
+  white-space: pre-wrap;
+}
+
+.qt-doc-signature {
+  margin: 34px 0 18px auto;
+  width: 42%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 10px;
+  color: #555;
+}
+
+.qt-doc-rule {
+  width: 100%;
+  border-top: 1px solid #999;
+  margin-bottom: 5px;
+}
+
+.qt-doc-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 2px solid;
+  padding-top: 6px;
+  font-size: 9px;
+  color: #777;
+}
+
+@media (max-width: 1180px) {
+  .qt-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .qt-preview {
+    position: static;
+  }
+}

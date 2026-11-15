@@ -42,10 +42,35 @@ Construido con Django REST Framework y React.
 - **Correlativo por empresa** que solo avanza: borrar una cotización deja un hueco en vez de reutilizar un número que ya llegó a un cliente
 - Fecha de emisión, validez y aviso de vencida
 - Costo, utilidad y margen calculados en el servidor; los montos que envía el cliente se ignoran
+- **Categoría por línea** (equipo · servicio propio · gasto operacional · flete · prevención y EPP), heredada del catálogo y ajustable por trato
+- **Composición del costo**: costo, venta y margen abiertos por categoría, en vivo mientras se cotiza y guardados con el documento. Un margen mezclado de 49% esconde que los equipos rindieron 38%, la mano de obra 180% y los gastos se cotizaron casi a costo
+- Reclasificar el catálogo **no altera** las cotizaciones ya emitidas: la categoría se copia al cotizar, igual que la descripción y el precio
 - Lectura en CLP, USD, EUR o UF con la tasa con que se emitió
+
+**Hojas de gastos**
+- Los gastos operacionales se **desglosan antes de cotizarlos**: tres bloques (viaje, flete, operaciones) con `unitario × cantidad × días`
+- En la planilla este cálculo vive en una hoja que **ninguna fórmula referencia**: alguien saca el total y lo teclea en la cotización, y el detalle se pierde. Acá queda guardado y la línea se **genera** desde él
+- Una hoja nueva puede **partir de otra**: el próximo proyecto arranca del anterior, no de la memoria
+- Cada bloque se lleva a la cotización como su propia línea con su categoría — "Gastos de viaje" y "Flete" separados, como los escribe la hoja Cálculo
+- Es **solo costo**: lo que se cobra por esos gastos lo decide el margen de la línea. Borrar una hoja no toca las cotizaciones que produjo
+
+**Costos de ejecución**
+- Al ganar la oportunidad, el proyecto **sella el presupuesto** de la cotización con que se cerró — totales y desglose por categoría. Editar o borrar esa cotización después no mueve la vara
+- Los gastos que aparecen ejecutando se registran en el proyecto con fecha, categoría, proveedor y documento
+- **Son siempre costo de la empresa**, nunca del cliente: la venta la fijó un documento ya aceptado, así que cada gasto sale de la utilidad. Por eso no existe una marca de "recuperable"
+- Los gastos van **encima** del presupuesto, no en lugar de él: nadie va a volver a teclear el datalogger que ya cotizó
+- La pestaña **Costos** del proyecto muestra margen cotizado → margen real, y el presupuestado contra el real por categoría. Solo la ve staff o ventas; el equipo que ejecuta abre el proyecto pero no lo que deja
+
+**Documento para el cliente**
+- **PDF generado desde `ClientQuoteSerializer`**, que no incluye costo, margen ni utilidad: lo que no se serializa no puede filtrarse por la API, por una página guardada ni por un payload copiado
+- La vista previa en pantalla y el archivo se arman con **el mismo payload**, así que no pueden discrepar
+- **Plantilla por empresa**: logo, razón social, RUT, contacto, color, título del documento, presentación, condiciones comerciales, firma y pie de página
+- Columnas opcionales (numeración, unidad, descuento). El costo y el margen no son una opción: no forman parte del documento
+- Las observaciones de la cotización **no se imprimen salvo que se active**, porque ese campo puede tener notas internas
 
 **Catálogo de productos**
 - Costo y precio en la misma ficha: el precio se **deriva del costo y el margen**, nunca se teclea
+- Un gasto operacional, un flete o la prevención son **fichas de catálogo como cualquier equipo**, con su propia categoría y su propio margen — así los trata la hoja Cálculo
 - Costeo en la moneda del proveedor (CLP, USD, EUR, UF) con Incoterm y multiplicador de importación
 - El multiplicador se aplica **solo cuando el Incoterm no es DDP** — bajo DDP el proveedor ya cubre flete y aranceles
 - **Historial de precios**: cada cambio de costo, precio o proveedor queda registrado con autor y fecha, guardando el monto en moneda de origen junto a la tasa, de modo que una subida se puede atribuir al proveedor o al tipo de cambio
@@ -117,6 +142,7 @@ Un ítem sin costo cargado reporta margen nulo, no infinito.
 | Base de datos | SQLite (desarrollo) |
 | Drag & Drop | @dnd-kit |
 | Iconos | Lucide React |
+| PDF de cotizaciones | reportlab |
 | Visor Excel | openpyxl |
 | Visor Word | python-docx |
 | Parser Email | Módulo email de Python (built-in) |
@@ -219,6 +245,9 @@ conversión de monedas con Incoterm y el historial de precios.
 | Cotizaciones | `/api/quotes/` | `?opportunity=` |
 | Productos | `/api/products/` | `?active=1` |
 | Tipos de cambio | `/api/exchange-rates/` | |
+| Hojas de gastos | `/api/expense-sheets/` | `?opportunity=` |
+| Gastos de ejecución | `/api/project-expenses/` | `?project=` |
+| Plantilla de cotización | `/api/quote-template/` | GET todos, PUT/PATCH solo staff |
 
 ### Acciones especiales
 | Método | Endpoint | Descripción |
@@ -227,6 +256,9 @@ conversión de monedas con Incoterm y el historial de precios.
 | POST | `/api/tasks/{id}/reject/` | Rechazar asignación |
 | GET | `/api/tasks/pending_assignments/` | Mis asignaciones pendientes |
 | POST | `/api/tasks/reorder/` | Reordenar tareas |
+| GET | `/api/projects/{id}/costs/` | Margen cotizado contra margen real (staff o ventas) |
+| GET | `/api/quotes/{id}/client-view/` | La cotización sin costos ni márgenes |
+| GET | `/api/quotes/{id}/pdf/` | PDF para el cliente (`?download=1` para forzar descarga) |
 | GET | `/api/assets/{id}/preview/` | Vista previa de archivo |
 | GET | `/api/assets/{id}/parse_eml/` | Parsear correo .eml |
 | GET | `/api/assets/{id}/eml_attachment/{index}/` | Descargar adjunto de .eml |

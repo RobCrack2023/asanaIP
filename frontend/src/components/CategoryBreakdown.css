@@ -1,0 +1,112 @@
+.cat-breakdown {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.cat-breakdown-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+/* One bar, one slice per category, widths proportional to cost. Reads before
+   the numbers do. */
+.cat-bar {
+  display: flex;
+  height: 7px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--tag-bg);
+  margin-bottom: 10px;
+}
+
+.cat-bar-slice {
+  height: 100%;
+}
+
+.cat-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cat-row {
+  display: grid;
+  grid-template-columns: 1fr 58px 104px 58px 104px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.cat-row-head {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  padding-bottom: 4px;
+}
+
+.cat-row-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cat-row-share,
+.cat-row-margin {
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cat-row-money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cat-row-head .cat-row-share,
+.cat-row-head .cat-row-margin,
+.cat-row-head .cat-row-money {
+  color: var(--text-muted);
+}
+
+/* Badge used inside the quote tables to tag a single line. */
+.cat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .cat-row {
+    grid-template-columns: 1fr 48px 88px;
+  }
+
+  .cat-row .cat-row-margin,
+  .cat-row .cat-row-money:last-child {
+    display: none;
+  }
+}

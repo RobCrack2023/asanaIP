@@ -4,6 +4,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import ExchangeRatesModal from '../components/ExchangeRatesModal'
 import { formatMoney } from '../stages'
+import { CATEGORIES, categoryColor, categoryShort } from '../categories'
 import { formatDateTime } from '../dates'
 import './ProductsPage.css'
 
@@ -27,6 +28,7 @@ export default function ProductsPage() {
   const [products, setProducts] = useState([])
   const [rates, setRates] = useState(null)
   const [search, setSearch] = useState('')
+  const [category, setCategory] = useState('')
   const [modal, setModal] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -50,6 +52,7 @@ export default function ProductsPage() {
   }
 
   const filtered = products.filter((p) => {
+    if (category && p.category !== category) return false
     const term = search.toLowerCase()
     return p.name.toLowerCase().includes(term)
       || p.sku?.toLowerCase().includes(term)
@@ -90,6 +93,15 @@ export default function ProductsPage() {
           />
         </div>
 
+        <select
+          className="products-category-filter"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        >
+          <option value="">Todas las categorías</option>
+          {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+
         <button className="rates-chip" onClick={() => setModal({ type: 'rates' })}>
           <Coins size={13} />
           {rates
@@ -128,7 +140,12 @@ export default function ProductsPage() {
           <div key={product.id} className={`products-table-row ${product.is_active ? '' : 'inactive'}`}>
             <span className="pt-col-sku">{product.sku || '—'}</span>
             <div className="pt-col-name">
-              <span className="pt-name">{product.name}</span>
+              <span className="pt-name">
+                {product.name}
+                <span className="pt-category" style={{ background: categoryColor(product.category) }}>
+                  {categoryShort(product.category)}
+                </span>
+              </span>
               {product.description && <span className="pt-description">{product.description}</span>}
             </div>
             <span className="pt-col-unit">{product.unit || '—'}</span>
@@ -201,6 +218,7 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
     sku: product?.sku || '',
     description: product?.description || '',
     unit: product?.unit || 'unidad',
+    category: product?.category || 'equipo',
     currency: product?.currency || 'CLP',
     cost_amount: product?.cost_amount ?? '',
     incoterm: product?.incoterm || 'DDP',
@@ -274,6 +292,17 @@ function ProductFormModal({ product, rates, onClose, onSaved }) {
             <label>Unidad</label>
             <input value={form.unit} onChange={(e) => handleChange('unit', e.target.value)} placeholder="unidad, m, hr..." />
           </div>
+        </div>
+
+        <div className="modal-field">
+          <label>Categoría</label>
+          <select value={form.category} onChange={(e) => handleChange('category', e.target.value)}>
+            {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+          <span className="field-hint">
+            Un gasto operacional, un flete o la prevención son fichas de catálogo como
+            cualquier equipo: se cotizan con su propio margen.
+          </span>
         </div>
 
         <div className="form-row">

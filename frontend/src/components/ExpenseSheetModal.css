@@ -1,0 +1,258 @@
+.es-block {
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.es-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.es-block-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* What the block is for, so nobody has to guess whether the rented pickup is
+   Viaje or Operaciones. */
+.es-block-name em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.es-block-total {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.es-lines {
+  margin-bottom: 8px;
+}
+
+.es-line {
+  display: grid;
+  grid-template-columns: 1fr 104px 62px 62px 108px 26px;
+  gap: 7px;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.es-line-head {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  padding-bottom: 2px;
+}
+
+.es-line-head span:nth-child(n + 2) {
+  text-align: right;
+}
+
+.es-line input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.es-line input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.es-line input[type='number'] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.es-line-subtotal {
+  text-align: right;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.es-line-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.es-line-remove:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.es-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: var(--tag-bg);
+  font-size: 14px;
+}
+
+.es-total strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.es-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 8px 2px 14px;
+}
+
+/* ── The sheet as it appears on the opportunity ─────────────────────────── */
+
+.opp-expense-card {
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.opp-expense-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.opp-expense-row:hover {
+  background: var(--content-bg-hover);
+}
+
+.opp-expense-name {
+  font-weight: 500;
+}
+
+.opp-expense-blocks {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.opp-expense-blocks span::after {
+  content: '·';
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+
+.opp-expense-blocks span:last-child::after {
+  content: '';
+}
+
+.opp-expense-total {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.opp-expense-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.opp-expense-actions button {
+  display: flex;
+  align-items: center;
+  padding: 5px;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.opp-expense-actions button:hover {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.opp-expense-actions button.danger:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.opp-expense-detail {
+  padding: 4px 14px 12px;
+  background: #faf9f8;
+  border-top: 1px solid var(--border-color);
+}
+
+.opp-expense-detail-line {
+  display: grid;
+  grid-template-columns: 110px 1fr 150px 110px;
+  gap: 10px;
+  font-size: 12.5px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.opp-expense-detail-line span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.opp-expense-detail-line .oed-block {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.opp-expense-detail-line .oed-driver {
+  color: var(--text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.opp-expense-notes {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-top: 8px;
+}
+
+@media (max-width: 760px) {
+  .es-line {
+    grid-template-columns: 1fr 84px 52px 52px 26px;
+  }
+
+  .es-line .es-line-subtotal,
+  .es-line-head span:nth-child(5) {
+    display: none;
+  }
+}
