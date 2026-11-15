@@ -97,6 +97,18 @@
   color: var(--text-primary);
 }
 
+/* An icon alone is easy to miss, and the two newest tabs hold the money. The label
+   gives way to the icon when the window is too narrow to fit both. */
+.view-btn-label {
+  white-space: nowrap;
+}
+
+@media (max-width: 1250px) {
+  .view-btn-label {
+    display: none;
+  }
+}
+
 .view-btn.active {
   background: white;
   color: var(--text-primary);

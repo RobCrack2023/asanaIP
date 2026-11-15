@@ -1,0 +1,318 @@
+.ec-page {
+  padding: 32px 40px;
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.ec-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.ec-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ec-header p {
+  max-width: 560px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ec-header .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ec-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  margin-bottom: 20px;
+  border: 1px solid #f6e2b8;
+  border-radius: 8px;
+  background: #fdf8ec;
+  color: #8a6d20;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ec-empty {
+  max-width: 560px;
+  padding: 28px;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ec-empty-actions {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+
+.ec-empty-note {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.ec-group {
+  margin-bottom: 26px;
+}
+
+.ec-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ec-group-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ec-group-head span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ec-table {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ec-row {
+  display: grid;
+  grid-template-columns: 1.5fr 120px 190px 1.2fr 190px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid #f3f2f1;
+}
+
+.ec-row:last-child {
+  border-bottom: none;
+}
+
+.ec-row:not(.ec-row-head):hover {
+  background: var(--content-bg-hover);
+}
+
+.ec-row-head {
+  background: #faf9f8;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.ec-row.inactive .ec-name,
+.ec-row.inactive .ec-value {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.ec-name {
+  min-width: 0;
+  font-weight: 500;
+}
+
+.ec-name em {
+  display: block;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.ec-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ec-row-head span:nth-child(2) {
+  text-align: right;
+}
+
+.ec-origin {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Three states, read at a glance: current, old, and never known. */
+.ec-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ec-badge.fresh {
+  background: #eaf5ef;
+  color: #3d7a5d;
+}
+
+.ec-badge.stale {
+  background: #fdf3da;
+  color: #9a6b00;
+}
+
+.ec-badge.none {
+  background: var(--tag-bg);
+  color: var(--text-muted);
+}
+
+.ec-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.ec-actions button {
+  display: flex;
+  align-items: center;
+  padding: 5px 6px;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ec-actions button:hover {
+  background: var(--tag-bg);
+  color: var(--text-primary);
+}
+
+.ec-actions button.danger:hover {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.ec-toggle {
+  font-size: 11.5px;
+}
+
+/* ── Values modal ───────────────────────────────────────────────────────── */
+
+.ec-values-intro {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.ec-values-form {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ec-values-form .form-row {
+  align-items: flex-end;
+}
+
+.ec-values-add {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  white-space: nowrap;
+}
+
+.ec-history {
+  display: flex;
+  flex-direction: column;
+}
+
+.ec-history-row {
+  display: grid;
+  grid-template-columns: 110px 110px 110px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 4px;
+  font-size: 12.5px;
+  border-bottom: 1px solid #f3f2f1;
+}
+
+.ec-history-head {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+/* The one that is offered when building a sheet. */
+.ec-history-row.latest {
+  background: #f4f8fd;
+  font-weight: 500;
+}
+
+.ec-history-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.ec-history-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.ec-history-empty {
+  padding: 14px 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.ec-source {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ec-source.real {
+  color: #3d7a5d;
+}
+
+@media (max-width: 1000px) {
+  .ec-row {
+    grid-template-columns: 1.4fr 100px 160px 150px;
+  }
+
+  .ec-row .ec-origin,
+  .ec-row-head span:nth-child(4) {
+    display: none;
+  }
+}

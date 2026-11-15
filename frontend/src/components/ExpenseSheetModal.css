@@ -256,3 +256,53 @@
     display: none;
   }
 }
+
+/* ── Concepts inside the sheet ──────────────────────────────────────────── */
+
+.es-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* How old the reference value is — the part worth reading before trusting it. */
+.es-ref {
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+.es-ref.stale {
+  color: #a8740d;
+  font-weight: 500;
+}
+
+.es-line input.stale {
+  border-color: #e6b94d;
+  background: #fffbea;
+}
+
+.es-add-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.es-concept-picker {
+  max-width: 340px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.es-concept-picker:focus {
+  outline: none;
+  border-color: var(--accent);
+}

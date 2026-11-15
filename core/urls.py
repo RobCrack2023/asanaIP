@@ -20,6 +20,7 @@ router.register(r'quotes', views.QuoteViewSet)
 router.register(r'products', views.ProductViewSet)
 router.register(r'exchange-rates', views.ExchangeRateViewSet)
 router.register(r'expense-sheets', views.ExpenseSheetViewSet)
+router.register(r'expense-concepts', views.ExpenseConceptViewSet)
 router.register(r'project-expenses', views.ProjectExpenseViewSet)
 
 urlpatterns = [

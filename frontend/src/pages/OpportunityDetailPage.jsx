@@ -602,7 +602,11 @@ function QuoteCard({ quote, onDelete }) {
           </div>
           {items.map((item) => (
             <div key={item.id} className="quote-detail-row">
-              <span>{item.description}</span>
+              <span>
+                {item.description}
+                {item.is_internal && <em className="qd-internal">Interno</em>}
+                {item.is_provision && <em className="qd-internal">Provisión</em>}
+              </span>
               <span className="cat-badge">
                 <i className="cat-dot" style={{ background: categoryColor(item.category) }} />
                 {categoryShort(item.category)}
@@ -610,7 +614,7 @@ function QuoteCard({ quote, onDelete }) {
               <span>{Number(item.quantity)}</span>
               <span className="qd-cost">{show(item.unit_cost)}</span>
               <span className="qd-cost">{formatMargin(item.margin)}</span>
-              <span>{show(item.unit_price)}</span>
+              <span>{item.is_internal ? '—' : show(item.unit_price)}</span>
               <span>{Number(item.discount_percent) ? `${Number(item.discount_percent)}%` : '—'}</span>
               <span>{show(item.subtotal)}</span>
             </div>
@@ -623,6 +627,20 @@ function QuoteCard({ quote, onDelete }) {
               <span>Utilidad · margen {formatMargin(quote.margin)}</span>
               <span>{show(quote.total_profit)}</span>
             </div>
+            {Number(quote.commission_rate) > 0 && (
+              <>
+                <div className="quote-total-line muted">
+                  <span>
+                    Comisión{quote.commission_to ? ` de ${quote.commission_to}` : ''} · {Number(quote.commission_rate)}% de la utilidad
+                  </span>
+                  <span>{show(quote.commission_amount)}</span>
+                </div>
+                <div className="quote-total-line profit">
+                  <span>Utilidad neta</span>
+                  <span>{show(quote.net_profit)}</span>
+                </div>
+              </>
+            )}
             <div className="quote-total-line">
               <span>Neto</span><span>{show(quote.subtotal)}</span>
             </div>
@@ -646,11 +664,14 @@ function QuoteCard({ quote, onDelete }) {
 }
 
 const emptyItem = () => ({ product: null, description: '', category: 'equipo', quantity: '1',
-                           unit_cost: '', margin: '', unit_price: '', discount_percent: '' })
+                           unit_cost: '', margin: '', unit_price: '', discount_percent: '',
+                           is_internal: false, is_provision: false })
 
 // Margin drives the price on any line that has a cost; a line without one
 // (a service, a pass-through) simply states its price.
 const itemPrice = (item) => {
+  // An internal line is a cost the company carries; nothing is charged for it.
+  if (item.is_internal) return 0
   const cost = Number(item.unit_cost) || 0
   if (!cost) return Number(item.unit_price) || 0
   return cost * (1 + (Number(item.margin) || 0) / 100)
@@ -676,6 +697,8 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
   const [displayCurrency, setDisplayCurrency] = useState('CLP')
   const [issueDate, setIssueDate] = useState(today())
   const [validUntil, setValidUntil] = useState('')
+  const [commissionRate, setCommissionRate] = useState('')
+  const [commissionTo, setCommissionTo] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -686,6 +709,7 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
   // so the composition is visible while the price is still being decided.
   const breakdown = categoryTotals(items, { cost: itemCost, sale: itemSubtotal })
   const profit = subtotal - totalCost
+  const commission = Math.max(profit, 0) * (Number(commissionRate) || 0) / 100
   const margin = totalCost ? subtotal / totalCost - 1 : null
   const taxAmount = subtotal * (Number(taxRate) || 0) / 100
   const total = subtotal + taxAmount
@@ -760,6 +784,8 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
         notes,
         tax_rate: Number(taxRate) || 0,
         display_currency: displayCurrency,
+        commission_rate: Number(commissionRate) || 0,
+        commission_to: commissionTo.trim(),
         issue_date: issueDate,
         valid_until: validUntil || null,
         items: filled.map((item) => ({
@@ -769,11 +795,16 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
           quantity: Number(item.quantity),
           category: item.category,
           unit_cost: Number(item.unit_cost) || 0,
+          is_internal: !!item.is_internal,
+          is_provision: !!item.is_provision,
           // Costed lines send the margin and let the server price them;
-          // uncosted ones send the price they were given.
-          margin: Number(item.unit_cost) ? (Number(item.margin) || 0) / 100 : null,
-          unit_price: Number(item.unit_cost) ? undefined : Number(item.unit_price) || 0,
-          discount_percent: Number(item.discount_percent) || 0,
+          // uncosted ones send the price they were given. An internal line has
+          // neither: it is all cost.
+          margin: !item.is_internal && Number(item.unit_cost)
+            ? (Number(item.margin) || 0) / 100 : null,
+          unit_price: item.is_internal ? 0
+            : Number(item.unit_cost) ? undefined : Number(item.unit_price) || 0,
+          discount_percent: item.is_internal ? 0 : Number(item.discount_percent) || 0,
         })),
       })
       onClose()
@@ -807,6 +838,8 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
               <span>Precio unit.</span>
               <span>Desc. %</span>
               <span>Subtotal</span>
+              <span title="Costo que la empresa asume: cuenta en el costo, no se cobra y no sale en el documento del cliente">Interno</span>
+              <span title="Provisión: un costo estimado que los gastos reales de la obra van reemplazando">Prov.</span>
               <span></span>
             </div>
             {items.map((item, index) => (
@@ -845,12 +878,14 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
                 <input
                   type="number"
                   step="any"
-                  disabled={!Number(item.unit_cost)}
+                  disabled={!Number(item.unit_cost) || item.is_internal}
                   value={item.margin}
                   onChange={(e) => updateItem(index, 'margin', e.target.value)}
                   placeholder="0"
                 />
-                {Number(item.unit_cost) ? (
+                {item.is_internal ? (
+                  <span className="quote-item-derived">No se cobra</span>
+                ) : Number(item.unit_cost) ? (
                   <span className="quote-item-derived">{formatMoney(itemPrice(item))}</span>
                 ) : (
                   <input
@@ -867,11 +902,26 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
                   min="0"
                   max="100"
                   step="any"
+                  disabled={item.is_internal}
                   value={item.discount_percent}
                   onChange={(e) => updateItem(index, 'discount_percent', e.target.value)}
                   placeholder="0"
                 />
                 <span className="quote-item-subtotal">{formatMoney(itemSubtotal(item))}</span>
+                <label className="quote-item-internal" title="Costo interno: no se cobra ni sale en el documento del cliente">
+                  <input
+                    type="checkbox"
+                    checked={!!item.is_internal}
+                    onChange={(e) => updateItem(index, 'is_internal', e.target.checked)}
+                  />
+                </label>
+                <label className="quote-item-internal" title="Provisión: un costo estimado que los gastos reales van reemplazando, en vez de sumarse a él">
+                  <input
+                    type="checkbox"
+                    checked={!!item.is_provision}
+                    onChange={(e) => updateItem(index, 'is_provision', e.target.checked)}
+                  />
+                </label>
                 <button
                   type="button"
                   className="quote-item-remove"
@@ -928,6 +978,20 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
             <span>Utilidad · margen {formatMargin(margin)}</span>
             <span>{formatMoney(profit)}</span>
           </div>
+          {commission > 0 && (
+            <>
+              <div className="quote-total-line muted">
+                <span>
+                  Comisión{commissionTo.trim() ? ` de ${commissionTo.trim()}` : ''} · {Number(commissionRate)}% de la utilidad
+                </span>
+                <span>{formatMoney(commission)}</span>
+              </div>
+              <div className="quote-total-line profit">
+                <span>Utilidad neta</span>
+                <span>{formatMoney(profit - commission)}</span>
+              </div>
+            </>
+          )}
           <div className="quote-total-line">
             <span>Neto</span>
             <span>{formatMoney(subtotal)}</span>
@@ -954,6 +1018,19 @@ function QuoteFormModal({ products = [], expenseSheets = [], onClose, onSaved })
           </div>
 
           <CategoryBreakdown rows={breakdown} money={formatMoney} />
+        </div>
+
+        <div className="form-row">
+          <div className="modal-field">
+            <label>Comisión del vendedor %</label>
+            <input type="number" min="0" max="100" step="any" value={commissionRate}
+                   onChange={(e) => setCommissionRate(e.target.value)} placeholder="0" />
+          </div>
+          <div className="modal-field">
+            <label>Vendedor</label>
+            <input value={commissionTo} onChange={(e) => setCommissionTo(e.target.value)}
+                   placeholder="Quién recibe la comisión" />
+          </div>
         </div>
 
         <div className="form-row">

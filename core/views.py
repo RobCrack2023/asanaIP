@@ -1,5 +1,6 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -14,6 +15,7 @@ from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, Product, ProductPriceEntry,
     ExchangeRate, Currency, QuoteTemplate, ExpenseSheet, ProjectExpense,
+    ExpenseConcept, STARTER_EXPENSE_CONCEPTS,
 )
 from .serializers import (
     UserSerializer, AreaSerializer, TeamSerializer,
@@ -23,8 +25,10 @@ from .serializers import (
     QuoteSerializer, ProductSerializer, ProductPriceEntrySerializer,
     ExchangeRateSerializer, ClientQuoteSerializer, QuoteTemplateSerializer,
     ExpenseSheetSerializer, ProjectExpenseSerializer,
+    ExpenseConceptSerializer, ExpenseRateSerializer,
 )
 from .quote_pdf import build_quote_pdf, quote_filename
+from .project_summary import build_summary
 from . import emails
 from . import notifications as notif
 
@@ -218,6 +222,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
             qs = qs.filter(team_id=team_id)
         return qs
 
+    def _company_project(self, request, pk):
+        """The project, found among the company's rather than through get_object().
+
+        get_object() narrows non-staff users to their own teams, and the person
+        who sold the deal is rarely on the team that executes it.
+        """
+        return get_object_or_404(
+            Project.objects.filter(team__area__organization=request.user.organization),
+            pk=pk,
+        )
+
     @action(detail=True, methods=['get'], permission_classes=[IsStaffOrSales])
     def costs(self, request, pk=None):
         """Quoted against spent.
@@ -225,16 +240,48 @@ class ProjectViewSet(viewsets.ModelViewSet):
         Its own endpoint rather than a field on the project: every member of
         the team can read a project, and what the deal earns is not theirs to
         see.
-
-        Scoped to the company rather than through get_object(), which narrows
-        non-staff users to their own teams — the salesperson who closed the
-        deal is rarely on the team that executes it.
         """
-        project = get_object_or_404(
-            Project.objects.filter(team__area__organization=request.user.organization),
-            pk=pk,
-        )
-        return Response(project.cost_summary)
+        return Response(self._company_project(request, pk).cost_summary)
+
+    @action(detail=True, methods=['get'], permission_classes=[IsStaffOrSales])
+    def summary(self, request, pk=None):
+        """The general summary, for the same eyes as the costs it contains."""
+        return Response(build_summary(self._company_project(request, pk)))
+
+    @action(detail=True, methods=['post'], permission_classes=[IsStaffOrSales])
+    def close(self, request, pk=None):
+        project = self._company_project(request, pk)
+        if project.is_closed:
+            return Response({'error': 'El proyecto ya está cerrado.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        raw_date = request.data.get('closed_on')
+        try:
+            closed_on = parse_date(raw_date) if raw_date else timezone.localdate()
+        except ValueError:
+            closed_on = None
+        if closed_on is None:
+            return Response({'error': 'La fecha de cierre no es válida.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        project.closed_on = closed_on
+        project.closed_by = request.user
+        project.closing_notes = (request.data.get('notes') or '').strip()
+        project.save(update_fields=['closed_on', 'closed_by', 'closing_notes', 'updated_at'])
+        return Response(build_summary(project))
+
+    @action(detail=True, methods=['post'], permission_classes=[IsStaffOrSales])
+    def reopen(self, request, pk=None):
+        project = self._company_project(request, pk)
+        if not project.is_closed:
+            return Response({'error': 'El proyecto no está cerrado.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        # The conclusions written at closing are kept: reopening to add a late
+        # invoice should not cost anyone their text.
+        project.closed_on = None
+        project.closed_by = None
+        project.save(update_fields=['closed_on', 'closed_by', 'updated_at'])
+        return Response(build_summary(project))
 
 
 class SectionViewSet(viewsets.ModelViewSet):
@@ -795,10 +842,61 @@ class ProductViewSet(viewsets.ModelViewSet):
         })
 
 
+class ExpenseConceptViewSet(viewsets.ModelViewSet):
+    """What the company routinely pays for, with the values it has been seen at."""
+
+    queryset = ExpenseConcept.objects.prefetch_related('rates').all()
+    serializer_class = ExpenseConceptSerializer
+    permission_classes = [IsStaffOrSales]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(organization=self.request.user.organization)
+        if self.request.query_params.get('active') == '1':
+            qs = qs.filter(is_active=True)
+        block = self.request.query_params.get('block')
+        if block:
+            qs = qs.filter(block=block)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
+
+    @action(detail=True, methods=['get', 'post'])
+    def rates(self, request, pk=None):
+        """The history of values, and a way to add one by hand — the quote that
+        just came in from the hotel, say."""
+        concept = self.get_object()
+        if request.method == 'GET':
+            rates = concept.rates.select_related('recorded_by')
+            return Response(ExpenseRateSerializer(rates, many=True).data)
+
+        serializer = ExpenseRateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(concept=concept, recorded_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'])
+    def starter(self, request):
+        """Load the usual suspects, without values. Safe to press twice."""
+        organization = request.user.organization
+        existing = {
+            name.lower() for name in
+            ExpenseConcept.objects.filter(organization=organization).values_list('name', flat=True)
+        }
+        missing = [
+            ExpenseConcept(organization=organization, name=name, block=block, unit=unit)
+            for name, block, unit in STARTER_EXPENSE_CONCEPTS
+            if name.lower() not in existing
+        ]
+        ExpenseConcept.objects.bulk_create(missing)
+        return Response({'created': len(missing)},
+                        status=status.HTTP_201_CREATED if missing else status.HTTP_200_OK)
+
+
 class ProjectExpenseViewSet(viewsets.ModelViewSet):
     """What executing a project actually cost the company."""
 
-    queryset = ProjectExpense.objects.select_related('recorded_by', 'project').all()
+    queryset = ProjectExpense.objects.select_related('recorded_by', 'project', 'concept').all()
     serializer_class = ProjectExpenseSerializer
     permission_classes = [IsStaffOrSales]
 
@@ -813,6 +911,11 @@ class ProjectExpenseViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(recorded_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        if instance.project.is_closed:
+            raise ValidationError('El proyecto está cerrado: reábrelo para borrar gastos.')
+        instance.delete()
 
 
 class ExpenseSheetViewSet(viewsets.ModelViewSet):

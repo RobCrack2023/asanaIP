@@ -8,7 +8,7 @@ from .models import (
     User, Area, Team, Project, Section, Task, Asset, Organization, Plan, Notification,
     Client, Opportunity, OpportunityActivity, Quote, QuoteItem, Product,
     ProductPriceEntry, ExchangeRate, Currency, QuoteTemplate, CostCategory,
-    ExpenseSheet, ExpenseLine, ProjectExpense,
+    ExpenseSheet, ExpenseLine, ProjectExpense, ExpenseConcept, ExpenseRate,
 )
 
 
@@ -361,7 +361,7 @@ class QuoteItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuoteItem
         fields = ['id', 'product', 'description', 'category', 'category_display',
-                  'unit', 'quantity', 'unit_cost', 'margin',
+                  'unit', 'quantity', 'unit_cost', 'margin', 'is_internal', 'is_provision',
                   'unit_price', 'discount_percent', 'subtotal', 'cost_subtotal', 'profit',
                   'effective_margin', 'order']
         # unit_price follows from unit_cost and margin on any costed line.
@@ -382,6 +382,25 @@ class QuoteItemSerializer(serializers.ModelSerializer):
             attrs['category'] = product.category
 
         cost = attrs.get('unit_cost') or 0
+
+        # A provision is an estimate of a cost, so without one there is nothing to estimate.
+        if attrs.get('is_provision') and not cost:
+            raise serializers.ValidationError(
+                {'unit_cost': 'Una provisión necesita su costo estimado.'}
+            )
+
+        # An internal line is all cost: what it needs is the cost, and whatever
+        # margin or price came with it is dropped rather than refused.
+        if attrs.get('is_internal'):
+            if not cost:
+                raise serializers.ValidationError(
+                    {'unit_cost': 'Un costo interno necesita su costo.'}
+                )
+            attrs['margin'] = None
+            attrs['unit_price'] = 0
+            attrs['discount_percent'] = 0
+            return attrs
+
         margin = attrs.get('margin')
         if cost and margin is None:
             raise serializers.ValidationError(
@@ -430,6 +449,9 @@ class QuoteSerializer(serializers.ModelSerializer):
     margin = serializers.DecimalField(max_digits=8, decimal_places=4, read_only=True)
     display_rate = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     category_totals = serializers.ReadOnlyField()
+    commission_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    net_profit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    provision_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = Quote
@@ -437,13 +459,21 @@ class QuoteSerializer(serializers.ModelSerializer):
                   'issue_date', 'valid_until', 'is_expired', 'tax_rate', 'items',
                   'subtotal', 'total_cost', 'total_profit', 'margin', 'category_totals',
                   'tax_amount', 'total_amount', 'display_currency', 'display_rate',
-                  'rate_uf', 'rate_usd', 'rate_eur', 'notes', 'created_at', 'updated_at']
+                  'rate_uf', 'rate_usd', 'rate_eur', 'commission_rate', 'commission_to',
+                  'commission_amount', 'net_profit', 'provision_total',
+                  'notes', 'created_at', 'updated_at']
         # Every money figure is derived from the items; the client sends the
         # breakdown and the rate, never the sums. The exchange rates are
         # stamped from the company's table at issue time.
         read_only_fields = ['id', 'number', 'subtotal', 'total_cost', 'total_profit', 'margin',
                             'category_totals', 'tax_amount', 'total_amount', 'display_rate',
-                            'rate_uf', 'rate_usd', 'rate_eur', 'created_at', 'updated_at']
+                            'rate_uf', 'rate_usd', 'rate_eur', 'commission_amount',
+                            'net_profit', 'provision_total', 'created_at', 'updated_at']
+
+    def validate_commission_rate(self, value):
+        if not 0 <= value <= 100:
+            raise serializers.ValidationError('La comisión debe estar entre 0 y 100.')
+        return value
 
     def validate_tax_rate(self, value):
         if not 0 <= value <= 100:
@@ -577,7 +607,8 @@ class ClientQuoteSerializer(serializers.ModelSerializer):
     field added here reaches the client on every channel at once.
     """
 
-    items = ClientQuoteItemSerializer(many=True, read_only=True)
+    # Through client_items, not items: internal costs are not the client's to see.
+    items = ClientQuoteItemSerializer(source='client_items', many=True, read_only=True)
     reference = serializers.CharField(read_only=True)
     is_expired = serializers.BooleanField(read_only=True)
     display_rate = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -628,13 +659,119 @@ class QuoteTemplateSerializer(serializers.ModelSerializer):
         return title
 
 
+class ExpenseRateSerializer(serializers.ModelSerializer):
+    source_display = serializers.CharField(source='get_source_display', read_only=True)
+    recorded_by_name = serializers.CharField(source='recorded_by.get_full_name',
+                                             read_only=True, default='')
+
+    class Meta:
+        model = ExpenseRate
+        fields = ['id', 'concept', 'unit_amount', 'date', 'source', 'source_display',
+                  'supplier', 'note', 'expense', 'recorded_by_name', 'created_at']
+        read_only_fields = ['id', 'concept', 'source_display', 'expense',
+                            'recorded_by_name', 'created_at']
+
+    def validate_unit_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('El valor debe ser mayor que cero.')
+        return value
+
+    def validate_source(self, value):
+        # "Real" keeps meaning money actually paid only if nobody can type it.
+        if value == ExpenseRate.Source.REAL:
+            raise serializers.ValidationError(
+                'Un valor real sale de un gasto registrado en un proyecto; no se ingresa a mano.'
+            )
+        return value
+
+
+class ExpenseConceptSerializer(serializers.ModelSerializer):
+    block_display = serializers.CharField(source='get_block_display', read_only=True)
+    latest_amount = serializers.SerializerMethodField()
+    latest_date = serializers.SerializerMethodField()
+    latest_source = serializers.SerializerMethodField()
+    latest_source_display = serializers.SerializerMethodField()
+    latest_supplier = serializers.SerializerMethodField()
+    age_days = serializers.IntegerField(read_only=True)
+    is_stale = serializers.BooleanField(read_only=True)
+    stale_after_days = serializers.SerializerMethodField()
+    #: Lets a concept be created already knowing one value. Write-only: it is an
+    #: instruction for the create, and what is kept is the rate it produces.
+    initial_amount = serializers.DecimalField(max_digits=12, decimal_places=2,
+                                              required=False, allow_null=True,
+                                              write_only=True)
+
+    class Meta:
+        model = ExpenseConcept
+        fields = ['id', 'name', 'block', 'block_display', 'unit', 'is_active',
+                  'latest_amount', 'latest_date', 'latest_source', 'latest_source_display',
+                  'latest_supplier', 'age_days', 'is_stale', 'stale_after_days',
+                  'initial_amount', 'created_at']
+        read_only_fields = ['id', 'block_display', 'created_at']
+
+    def get_latest_amount(self, obj):
+        rate = obj.latest_rate
+        return str(rate.unit_amount) if rate else None
+
+    def get_latest_date(self, obj):
+        rate = obj.latest_rate
+        return rate.date.isoformat() if rate else None
+
+    def get_latest_source(self, obj):
+        rate = obj.latest_rate
+        return rate.source if rate else None
+
+    def get_latest_source_display(self, obj):
+        rate = obj.latest_rate
+        return rate.get_source_display() if rate else None
+
+    def get_latest_supplier(self, obj):
+        rate = obj.latest_rate
+        return rate.supplier if rate else ''
+
+    def get_stale_after_days(self, obj):
+        return ExpenseConcept.STALE_AFTER_DAYS
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('El concepto necesita un nombre.')
+        organization = self.context['request'].user.organization
+        clashes = ExpenseConcept.objects.filter(organization=organization, name__iexact=name)
+        if self.instance:
+            clashes = clashes.exclude(pk=self.instance.pk)
+        if clashes.exists():
+            raise serializers.ValidationError('Ya existe un concepto con este nombre.')
+        return name
+
+    def validate_initial_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('El valor debe ser mayor que cero.')
+        return value
+
+    @transaction.atomic
+    def create(self, validated_data):
+        initial_amount = validated_data.pop('initial_amount', None)
+        concept = super().create(validated_data)
+        if initial_amount:
+            concept.record_rate(initial_amount, ExpenseRate.Source.ESTIMADO,
+                                user=self.context['request'].user)
+        return concept
+
+    def update(self, instance, validated_data):
+        validated_data.pop('initial_amount', None)
+        return super().update(instance, validated_data)
+
+
 class ExpenseLineSerializer(serializers.ModelSerializer):
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     block_display = serializers.CharField(source='get_block_display', read_only=True)
+    concept = OrgScopedRelatedField(queryset=ExpenseConcept.objects.all(),
+                                    required=False, allow_null=True)
 
     class Meta:
         model = ExpenseLine
-        fields = ['id', 'block', 'block_display', 'description',
+        fields = ['id', 'block', 'block_display', 'concept', 'description',
                   'unit_amount', 'quantity', 'days', 'subtotal', 'order']
         read_only_fields = ['id', 'subtotal', 'block_display']
 
@@ -690,6 +827,25 @@ class ExpenseSheetSerializer(serializers.ModelSerializer):
         ExpenseLine.objects.bulk_create([
             ExpenseLine(sheet=sheet, **data) for data in lines_data
         ])
+        self._remember_values(lines_data)
+
+    def _remember_values(self, lines_data):
+        """Feed the concepts with the values typed into the sheet.
+
+        A price typed while estimating is the freshest thing the company knows
+        about what that concept costs today, so it goes into the history —
+        otherwise the next sheet would be offered the old value again and the
+        same fresh quote would have to be typed twice. One value per concept
+        per save, and a blank is not a value.
+        """
+        user = self.context['request'].user
+        seen = {}
+        for data in lines_data:
+            concept = data.get('concept')
+            if concept is not None and data.get('unit_amount', 0) > 0:
+                seen[concept.pk] = (concept, data['unit_amount'])
+        for concept, unit_amount in seen.values():
+            concept.observe(unit_amount, ExpenseRate.Source.ESTIMADO, user=user)
 
     @transaction.atomic
     def create(self, validated_data):
@@ -723,10 +879,16 @@ class ProjectExpenseSerializer(serializers.ModelSerializer):
     recorded_by_name = serializers.CharField(source='recorded_by.get_full_name',
                                              read_only=True, default='')
 
+    concept = OrgScopedRelatedField(queryset=ExpenseConcept.objects.all(),
+                                    required=False, allow_null=True)
+    concept_name = serializers.CharField(source='concept.name', read_only=True, default='')
+    unit_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
     class Meta:
         model = ProjectExpense
         fields = ['id', 'project', 'incurred_on', 'category', 'category_display',
-                  'description', 'amount', 'supplier', 'document', 'notes',
+                  'description', 'amount', 'concept', 'concept_name', 'units',
+                  'unit_amount', 'supplier', 'document', 'notes',
                   'recorded_by_name', 'created_at']
         read_only_fields = ['id', 'category_display', 'recorded_by_name', 'created_at']
 
@@ -740,3 +902,36 @@ class ProjectExpenseSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError('El monto debe ser mayor que cero.')
         return value
+
+    def validate_units(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Las unidades deben ser mayores que cero.')
+        return value
+
+    def validate(self, attrs):
+        """A closed project takes no more expenses, in or out.
+
+        Both ends are checked: an expense cannot be added to a closed project, and
+        one already on a closed project cannot be edited or moved away, which
+        would change figures that were declared final.
+        """
+        involved = [attrs.get('project')]
+        if self.instance is not None:
+            involved.append(self.instance.project)
+        if any(project is not None and project.is_closed for project in involved):
+            raise serializers.ValidationError(
+                'El proyecto está cerrado: reábrelo para registrar o corregir gastos.'
+            )
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        expense = super().create(validated_data)
+        expense.sync_rate(self.context['request'].user)
+        return expense
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        expense = super().update(instance, validated_data)
+        expense.sync_rate(self.context['request'].user)
+        return expense

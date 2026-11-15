@@ -118,7 +118,7 @@
 .costs-table-head,
 .costs-table-row {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr;
   gap: 10px;
   padding: 9px 16px;
   align-items: center;
@@ -278,4 +278,77 @@
   .costs-expense .costs-expense-doc {
     display: none;
   }
+}
+
+/* The estimate that expenses consume, and how much of it is left. */
+.costs-provision {
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+
+.costs-provision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.costs-provision-head .costs-card-label {
+  margin-bottom: 0;
+}
+
+.costs-provision-head .over {
+  color: var(--danger);
+}
+
+.costs-provision-bar {
+  height: 7px;
+  border-radius: 4px;
+  background: var(--tag-bg);
+  overflow: hidden;
+}
+
+.costs-provision-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.costs-provision-bar span.over {
+  background: var(--danger);
+}
+
+.costs-provision-foot {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.costs-estimate {
+  color: var(--text-muted);
+}
+
+.costs-commission {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.costs-commission > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.costs-commission .costs-card-label {
+  margin-bottom: 0;
 }

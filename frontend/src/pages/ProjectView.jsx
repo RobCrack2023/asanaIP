@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   Plus, Check, ChevronDown, ChevronRight, Calendar, User, File,
-  Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock, Wallet,
+  Flag, MoreHorizontal, Trash2, X, List, LayoutGrid, Repeat, Lock, Wallet, ClipboardList,
 } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragOverlay } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
@@ -11,6 +11,7 @@ import api from '../api'
 import KanbanView from './KanbanView'
 import AssetsPanel from './AssetsPanel'
 import ProjectCostsPanel from './ProjectCostsPanel'
+import ProjectSummaryPanel from './ProjectSummaryPanel'
 import CompleteTaskModal from '../components/CompleteTaskModal'
 import './ProjectView.css'
 
@@ -275,17 +276,22 @@ export default function ProjectView({ user }) {
           </div>
           <div className="view-switcher">
             <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')} title="Vista lista">
-              <List size={16} />
+              <List size={16} /><span className="view-btn-label">Lista</span>
             </button>
             <button className={`view-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')} title="Vista tablero">
-              <LayoutGrid size={16} />
+              <LayoutGrid size={16} /><span className="view-btn-label">Tablero</span>
             </button>
             <button className={`view-btn ${viewMode === 'assets' ? 'active' : ''}`} onClick={() => setViewMode('assets')} title="Assets">
-              <File size={16} />
+              <File size={16} /><span className="view-btn-label">Assets</span>
             </button>
             {canSeeCosts && (
               <button className={`view-btn ${viewMode === 'costs' ? 'active' : ''}`} onClick={() => setViewMode('costs')} title="Costos">
-                <Wallet size={16} />
+                <Wallet size={16} /><span className="view-btn-label">Costos</span>
+              </button>
+            )}
+            {canSeeCosts && (
+              <button className={`view-btn ${viewMode === 'summary' ? 'active' : ''}`} onClick={() => setViewMode('summary')} title="Resumen del proyecto">
+                <ClipboardList size={16} /><span className="view-btn-label">Resumen</span>
               </button>
             )}
           </div>
@@ -293,7 +299,9 @@ export default function ProjectView({ user }) {
         {project.description && <p className="project-description">{project.description}</p>}
       </div>
 
-      {viewMode === 'costs' && canSeeCosts ? (
+      {viewMode === 'summary' && canSeeCosts ? (
+        <ProjectSummaryPanel projectId={parseInt(projectId)} />
+      ) : viewMode === 'costs' && canSeeCosts ? (
         <ProjectCostsPanel projectId={parseInt(projectId)} />
       ) : viewMode === 'assets' ? (
         <AssetsPanel projectId={parseInt(projectId)} />

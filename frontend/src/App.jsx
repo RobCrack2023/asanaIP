@@ -13,6 +13,7 @@ import ProductsPage from './pages/ProductsPage'
 import OpportunitiesPage from './pages/OpportunitiesPage'
 import OpportunityDetailPage from './pages/OpportunityDetailPage'
 import QuoteTemplatePage from './pages/QuoteTemplatePage'
+import ExpenseConceptsPage from './pages/ExpenseConceptsPage'
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/opportunities" element={<OpportunitiesPage />} />
         <Route path="/opportunities/:opportunityId" element={<OpportunityDetailPage />} />
         <Route path="/quote-template" element={<QuoteTemplatePage user={user} />} />
+        <Route path="/expense-concepts" element={<ExpenseConceptsPage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Layout>

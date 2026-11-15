@@ -1,10 +1,13 @@
+from datetime import timedelta
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import (
-    Area, Client, ExchangeRate, ExpenseSheet, Opportunity, OpportunityActivity,
-    Organization, Product, ProductPriceEntry, Project, Quote, QuoteItem, Team, User,
+    Area, Asset, Client, ExchangeRate, ExpenseConcept, ExpenseRate, ExpenseSheet, Opportunity,
+    OpportunityActivity, Organization, Product, ProductPriceEntry, Project, ProjectExpense,
+    Quote, QuoteItem, Team, User,
 )
 
 
@@ -1276,3 +1279,965 @@ class ProjectExpenseTests(APITestCase):
         response = self._expense(project=theirs.id)
 
         self.assertEqual(response.status_code, 400)
+
+
+class ExpenseConceptTests(APITestCase):
+    """Concepts hold no price, only the values they have been seen at."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Agrícola Los Nogales')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Estación meteorológica',
+        )
+        area = Area.objects.create(name='Proyectos', organization=self.org)
+        team = Team.objects.create(name='Terreno', area=area)
+        self.project = Project.objects.create(name='Estación', team=team)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _days_ago(self, days):
+        return (timezone.localdate() - timedelta(days=days)).isoformat()
+
+    def _concept(self, **extra):
+        payload = {'name': 'Alojamiento', 'block': 'viaje', 'unit': 'noche'}
+        payload.update(extra)
+        response = self.client.post('/api/expense-concepts/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def _rate(self, concept_id, amount, date=None, source='cotizado', **extra):
+        payload = {'unit_amount': amount, 'source': source}
+        if date:
+            payload['date'] = date
+        payload.update(extra)
+        return self.client.post(f'/api/expense-concepts/{concept_id}/rates/', payload,
+                                format='json')
+
+    def _sheet(self, lines, **extra):
+        payload = {'opportunity': self.opportunity.id, 'name': 'Gastos', 'lines': lines}
+        payload.update(extra)
+        return self.client.post('/api/expense-sheets/', payload, format='json')
+
+    def _line(self, concept_id, amount, **extra):
+        line = {'block': 'viaje', 'description': 'Alojamiento', 'concept': concept_id,
+                'unit_amount': amount, 'quantity': '2', 'days': '3'}
+        line.update(extra)
+        return line
+
+    def _expense(self, **extra):
+        payload = {'project': self.project.id, 'description': 'Arriendo camioneta',
+                   'category': 'gasto', 'amount': '260000'}
+        payload.update(extra)
+        return self.client.post('/api/project-expenses/', payload, format='json')
+
+    def _detail(self, concept_id):
+        return self.client.get(f'/api/expense-concepts/{concept_id}/').data
+
+    # ── the concept itself ─────────────────────────────────────────────────
+    def test_a_new_concept_knows_no_value_and_is_not_stale(self):
+        concept = self._concept()
+
+        self.assertIsNone(concept['latest_amount'])
+        self.assertIsNone(concept['age_days'])
+        # No value is a different state from an old value.
+        self.assertFalse(concept['is_stale'])
+
+    def test_a_concept_can_be_created_already_knowing_a_value(self):
+        concept = self._concept(initial_amount='55000')
+
+        self.assertEqual(concept['latest_amount'], '55000.00')
+        self.assertEqual(concept['latest_source'], 'estimado')
+        self.assertEqual(concept['age_days'], 0)
+
+    def test_names_are_unique_per_company_ignoring_case(self):
+        self._concept(name='Alojamiento')
+
+        response = self.client.post('/api/expense-concepts/',
+                                    {'name': 'alojamiento', 'block': 'viaje'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_another_company_may_reuse_the_name(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        ExpenseConcept.objects.create(organization=other, name='Alojamiento')
+
+        concept = self._concept(name='Alojamiento')
+
+        self.assertEqual(concept['name'], 'Alojamiento')
+
+    # ── the value history ──────────────────────────────────────────────────
+    def test_the_latest_value_is_the_newest_by_date_not_by_entry(self):
+        """A receipt typed a month late must not overwrite a newer quote."""
+        concept = self._concept()
+        self._rate(concept['id'], '60000', date=self._days_ago(0))
+        self._rate(concept['id'], '40000', date=self._days_ago(100))
+
+        detail = self._detail(concept['id'])
+
+        self.assertEqual(detail['latest_amount'], '60000.00')
+
+    def test_a_value_goes_stale_after_ninety_days_and_is_flagged_not_replaced(self):
+        concept = self._concept()
+        self._rate(concept['id'], '55000', date=self._days_ago(91))
+
+        detail = self._detail(concept['id'])
+
+        self.assertTrue(detail['is_stale'])
+        self.assertEqual(detail['age_days'], 91)
+        self.assertEqual(detail['stale_after_days'], 90)
+        # Still offered: stale means "check it", never "forget it".
+        self.assertEqual(detail['latest_amount'], '55000.00')
+
+    def test_ninety_days_exactly_is_still_fresh(self):
+        concept = self._concept()
+        self._rate(concept['id'], '55000', date=self._days_ago(90))
+
+        self.assertFalse(self._detail(concept['id'])['is_stale'])
+
+    def test_a_hand_entered_value_cannot_claim_to_be_real(self):
+        """Real keeps meaning money actually paid only if nobody can type it."""
+        concept = self._concept()
+
+        response = self._rate(concept['id'], '55000', source='real')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_history_lists_every_value_newest_first(self):
+        concept = self._concept()
+        self._rate(concept['id'], '50000', date=self._days_ago(60))
+        self._rate(concept['id'], '60000', date=self._days_ago(5))
+        self._rate(concept['id'], '55000', date=self._days_ago(30))
+
+        response = self.client.get(f'/api/expense-concepts/{concept["id"]}/rates/')
+
+        self.assertEqual([r['unit_amount'] for r in response.data],
+                         ['60000.00', '55000.00', '50000.00'])
+
+    # ── values typed into an expense sheet ─────────────────────────────────
+    def test_a_sheet_line_remembers_the_concept_it_came_from(self):
+        concept = self._concept()
+
+        response = self._sheet([self._line(concept['id'], '55000')])
+
+        self.assertEqual(response.data['lines'][0]['concept'], concept['id'])
+
+    def test_a_price_typed_in_a_sheet_feeds_the_history(self):
+        concept = self._concept()
+
+        self._sheet([self._line(concept['id'], '58000')])
+
+        rates = ExpenseRate.objects.filter(concept_id=concept['id'])
+        self.assertEqual(rates.count(), 1)
+        self.assertEqual(str(rates[0].unit_amount), '58000.00')
+        self.assertEqual(rates[0].source, 'estimado')
+
+    def test_typing_the_value_already_on_file_adds_nothing(self):
+        concept = self._concept(initial_amount='55000')
+
+        self._sheet([self._line(concept['id'], '55000')])
+
+        self.assertEqual(ExpenseRate.objects.filter(concept_id=concept['id']).count(), 1)
+
+    def test_typing_a_different_value_becomes_the_new_reference(self):
+        concept = self._concept(initial_amount='55000')
+
+        self._sheet([self._line(concept['id'], '61000')])
+
+        self.assertEqual(ExpenseRate.objects.filter(concept_id=concept['id']).count(), 2)
+        self.assertEqual(self._detail(concept['id'])['latest_amount'], '61000.00')
+
+    def test_retyping_a_stale_value_confirms_it_and_starts_the_age_over(self):
+        concept = self._concept()
+        self._rate(concept['id'], '55000', date=self._days_ago(120))
+        self.assertTrue(self._detail(concept['id'])['is_stale'])
+
+        self._sheet([self._line(concept['id'], '55000')])
+
+        detail = self._detail(concept['id'])
+        self.assertFalse(detail['is_stale'])
+        self.assertEqual(detail['age_days'], 0)
+
+    def test_a_blank_value_is_not_a_value(self):
+        concept = self._concept()
+
+        self._sheet([self._line(concept['id'], '0')])
+
+        self.assertFalse(ExpenseRate.objects.filter(concept_id=concept['id']).exists())
+
+    def test_saving_the_same_sheet_twice_does_not_duplicate_the_value(self):
+        concept = self._concept()
+        sheet = self._sheet([self._line(concept['id'], '58000')])
+
+        self.client.patch(f'/api/expense-sheets/{sheet.data["id"]}/',
+                          {'lines': [self._line(concept['id'], '58000')]}, format='json')
+
+        self.assertEqual(ExpenseRate.objects.filter(concept_id=concept['id']).count(), 1)
+
+    def test_a_line_cannot_use_another_company_concept(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        theirs = ExpenseConcept.objects.create(organization=other, name='Suyo')
+
+        response = self._sheet([self._line(theirs.id, '55000')])
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_copying_a_sheet_keeps_the_concepts(self):
+        concept = self._concept()
+        source = self._sheet([self._line(concept['id'], '55000')])
+
+        response = self.client.post('/api/expense-sheets/', {
+            'opportunity': self.opportunity.id, 'name': 'Copia',
+            'copy_from': source.data['id'],
+        }, format='json')
+
+        self.assertEqual(response.data['lines'][0]['concept'], concept['id'])
+
+    # ── values learned from real expenses ──────────────────────────────────
+    def test_a_real_expense_teaches_the_concept_what_a_unit_cost(self):
+        """260.000 for four days of the pickup is 65.000 a day."""
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones', unit='día')
+
+        self._expense(concept=concept['id'], units='4', supplier='Rent a Car Maule',
+                      incurred_on=self._days_ago(10))
+
+        rate = ExpenseRate.objects.get(concept_id=concept['id'])
+        self.assertEqual(str(rate.unit_amount), '65000.00')
+        self.assertEqual(rate.source, 'real')
+        self.assertEqual(rate.supplier, 'Rent a Car Maule')
+        self.assertEqual(rate.date.isoformat(), self._days_ago(10))
+
+    def test_the_value_is_dated_when_the_money_was_spent_not_when_typed(self):
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones')
+        self._rate(concept['id'], '70000', date=self._days_ago(0))
+
+        self._expense(concept=concept['id'], units='4', incurred_on=self._days_ago(200))
+
+        # The old receipt joins the history but does not displace the newer quote.
+        self.assertEqual(ExpenseRate.objects.filter(concept_id=concept['id']).count(), 2)
+        self.assertEqual(self._detail(concept['id'])['latest_amount'], '70000.00')
+
+    def test_correcting_an_expense_corrects_the_value_it_taught(self):
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones')
+        expense = self._expense(concept=concept['id'], units='4')
+
+        self.client.patch(f'/api/project-expenses/{expense.data["id"]}/',
+                          {'amount': '300000'}, format='json')
+
+        rates = ExpenseRate.objects.filter(concept_id=concept['id'])
+        self.assertEqual(rates.count(), 1)
+        self.assertEqual(str(rates[0].unit_amount), '75000.00')
+
+    def test_taking_the_concept_off_an_expense_removes_the_value_it_taught(self):
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones')
+        expense = self._expense(concept=concept['id'], units='4')
+
+        self.client.patch(f'/api/project-expenses/{expense.data["id"]}/',
+                          {'concept': None}, format='json')
+
+        self.assertFalse(ExpenseRate.objects.filter(concept_id=concept['id']).exists())
+
+    def test_deleting_an_expense_removes_the_value_it_taught(self):
+        """The history must not carry a price from a receipt that is gone."""
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones')
+        expense = self._expense(concept=concept['id'], units='4')
+
+        self.client.delete(f'/api/project-expenses/{expense.data["id"]}/')
+
+        self.assertFalse(ExpenseRate.objects.filter(concept_id=concept['id']).exists())
+
+    def test_an_expense_without_a_concept_leaves_no_trace_in_the_history(self):
+        self._expense()
+
+        self.assertFalse(ExpenseRate.objects.exists())
+
+    def test_an_expense_cannot_use_another_company_concept(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        theirs = ExpenseConcept.objects.create(organization=other, name='Suyo')
+
+        response = self._expense(concept=theirs.id, units='4')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_units_must_be_greater_than_zero(self):
+        concept = self._concept()
+
+        response = self._expense(concept=concept['id'], units='0')
+
+        self.assertEqual(response.status_code, 400)
+
+    # ── housekeeping ───────────────────────────────────────────────────────
+    def test_starter_loads_the_usual_concepts_without_values_and_is_safe_to_repeat(self):
+        first = self.client.post('/api/expense-concepts/starter/')
+        second = self.client.post('/api/expense-concepts/starter/')
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.data['created'], 8)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data['created'], 0)
+        concepts = self.client.get('/api/expense-concepts/').data
+        self.assertEqual(len(concepts), 8)
+        # None of them has a fixed price, so none is loaded with one.
+        self.assertTrue(all(c['latest_amount'] is None for c in concepts))
+
+    def test_starter_does_not_duplicate_a_concept_that_already_exists(self):
+        self._concept(name='alojamiento')
+
+        response = self.client.post('/api/expense-concepts/starter/')
+
+        self.assertEqual(response.data['created'], 7)
+
+    def test_another_company_cannot_see_the_concepts(self):
+        concept = self._concept()
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        User.objects.create_user(username='intruso', password='secret',
+                                 organization=other, is_sales=True)
+        self.client.logout()
+        self.client.login(username='intruso', password='secret')
+
+        self.assertEqual(self.client.get('/api/expense-concepts/').data, [])
+        self.assertEqual(
+            self.client.get(f'/api/expense-concepts/{concept["id"]}/').status_code, 404)
+
+    def test_concepts_filter_by_block_and_by_active(self):
+        self._concept(name='Alojamiento', block='viaje')
+        self._concept(name='Prevencionista', block='operaciones')
+        retired = self._concept(name='Antiguo', block='operaciones')
+        self.client.patch(f'/api/expense-concepts/{retired["id"]}/',
+                          {'is_active': False}, format='json')
+
+        by_block = self.client.get('/api/expense-concepts/?block=operaciones').data
+        active = self.client.get('/api/expense-concepts/?active=1').data
+
+        self.assertEqual(sorted(c['name'] for c in by_block), ['Antiguo', 'Prevencionista'])
+        self.assertEqual(sorted(c['name'] for c in active), ['Alojamiento', 'Prevencionista'])
+
+    def test_deactivating_a_concept_keeps_its_history(self):
+        concept = self._concept(initial_amount='55000')
+
+        self.client.patch(f'/api/expense-concepts/{concept["id"]}/',
+                          {'is_active': False}, format='json')
+
+        self.assertEqual(ExpenseRate.objects.filter(concept_id=concept['id']).count(), 1)
+
+    def test_deleting_a_concept_leaves_the_sheets_and_expenses_that_used_it(self):
+        concept = self._concept(name='Arriendo de camioneta', block='operaciones')
+        sheet = self._sheet([self._line(concept['id'], '65000')])
+        expense = self._expense(concept=concept['id'], units='4')
+
+        self.client.delete(f'/api/expense-concepts/{concept["id"]}/')
+
+        self.assertEqual(
+            self.client.get(f'/api/expense-sheets/{sheet.data["id"]}/').data['lines'][0]['concept'],
+            None)
+        self.assertEqual(ProjectExpense.objects.get(pk=expense.data['id']).concept_id, None)
+
+
+class InternalCostLineTests(APITestCase):
+    """Costs the company carries without charging for them, and never shows."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        client = Client.objects.create(organization=self.org, name='Cliente de Prueba S.A.')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=client, name='Mantención estación',
+        )
+        area = Area.objects.create(name='Proyectos', organization=self.org)
+        self.team = Team.objects.create(name='Terreno', area=area)
+
+    SALE_LINE = {'description': 'Mantención de la estación', 'category': 'servicio',
+                 'quantity': 1, 'unit_cost': '1000000', 'margin': '1.0'}
+    INTERNAL_LINE = {'description': 'Sueldos del equipo en terreno', 'category': 'servicio',
+                     'quantity': 1, 'unit_cost': '500000', 'is_internal': True}
+
+    def _quote(self, items, **extra):
+        payload = {'opportunity': self.opportunity.id, 'issue_date': '2026-08-07',
+                   'items': items}
+        payload.update(extra)
+        response = self.client.post('/api/quotes/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def test_an_internal_line_counts_in_the_cost_but_charges_nothing(self):
+        quote = self._quote([self.SALE_LINE, self.INTERNAL_LINE])
+
+        self.assertEqual(str(quote['total_cost']), '1500000.00')
+        # Only the sale line is charged: 1.000.000 at a margin of 100%.
+        self.assertEqual(str(quote['subtotal']), '2000000.00')
+        internal = quote['items'][1]
+        self.assertTrue(internal['is_internal'])
+        self.assertEqual(str(internal['unit_price']), '0.00')
+        self.assertEqual(str(internal['subtotal']), '0.00')
+        self.assertIsNone(internal['margin'])
+
+    def test_internal_costs_pull_the_blended_margin_down(self):
+        without = self._quote([self.SALE_LINE])
+        with_internal = self._quote([self.SALE_LINE, self.INTERNAL_LINE])
+
+        self.assertEqual(str(without['margin']), '1.0000')
+        # 2.000.000 of sale over 1.500.000 of cost.
+        self.assertEqual(str(with_internal['margin']), '0.3333')
+
+    def test_an_internal_line_drops_the_margin_price_and_discount_it_arrives_with(self):
+        quote = self._quote([dict(self.INTERNAL_LINE, margin='0.5', unit_price='999999',
+                                  discount_percent='10')])
+
+        line = quote['items'][0]
+        self.assertIsNone(line['margin'])
+        self.assertEqual(str(line['unit_price']), '0.00')
+        self.assertEqual(str(line['discount_percent']), '0.00')
+
+    def test_an_internal_line_needs_its_cost(self):
+        response = self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'items': [{'description': 'Sueldos', 'quantity': 1, 'is_internal': True}],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_an_internal_cost_shows_in_its_category_at_minus_one_hundred_percent(self):
+        quote = self._quote([self.SALE_LINE, dict(self.INTERNAL_LINE, category='gasto')])
+
+        rows = {row['category']: row for row in quote['category_totals']}
+        self.assertEqual(str(rows['gasto']['cost']), '500000.00')
+        self.assertEqual(str(rows['gasto']['sale']), '0.00')
+        self.assertEqual(str(rows['gasto']['margin']), '-1.0000')
+
+    def test_the_client_never_sees_an_internal_line(self):
+        quote = self._quote([self.SALE_LINE, self.INTERNAL_LINE])
+
+        response = self.client.get(f'/api/quotes/{quote["id"]}/client-view/')
+
+        shown = response.data['quote']
+        self.assertEqual([item['description'] for item in shown['items']],
+                         ['Mantención de la estación'])
+        self.assertNotIn('Sueldos', str(shown))
+        self.assertEqual(str(shown['subtotal']), '2000000.00')
+
+    def test_the_pdf_still_builds_when_there_are_internal_lines(self):
+        quote = self._quote([self.SALE_LINE, self.INTERNAL_LINE])
+
+        response = self.client.get(f'/api/quotes/{quote["id"]}/pdf/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.startswith(b'%PDF'))
+
+    # ── a project that was already running when the deal was recorded ─────────
+    def _won_ready(self):
+        self._quote([self.SALE_LINE, self.INTERNAL_LINE], status='approved')
+        return Opportunity.objects.get(pk=self.opportunity.pk)
+
+    def test_the_budget_stamped_on_a_project_includes_the_internal_costs(self):
+        opportunity = self._won_ready()
+
+        project = opportunity.mark_won(team=self.team, user=self.user)
+
+        self.assertEqual(str(project.budget_cost), '1500000.00')
+        self.assertEqual(str(project.budget_sale), '2000000.00')
+
+    def test_a_won_deal_can_adopt_a_project_that_already_exists(self):
+        existing = Project.objects.create(name='Mantención ya ejecutada', team=self.team,
+                                          description='Descripción propia.')
+        opportunity = self._won_ready()
+
+        project = opportunity.mark_won(user=self.user, project=existing)
+
+        self.assertEqual(project.pk, existing.pk)
+        self.assertEqual(Project.objects.count(), 1)
+        opportunity.refresh_from_db()
+        existing.refresh_from_db()
+        self.assertEqual(opportunity.project_id, existing.pk)
+        self.assertEqual(opportunity.stage, 'ganada')
+        self.assertEqual(str(existing.budget_cost), '1500000.00')
+        # What the project already said about itself is not overwritten.
+        self.assertEqual(existing.description, 'Descripción propia.')
+        activity = opportunity.activities.filter(kind='won').get()
+        self.assertIn('vinculado', activity.body)
+
+    def test_an_adopted_project_gets_a_section_only_if_it_has_none(self):
+        bare = Project.objects.create(name='Sin secciones', team=self.team)
+        self._won_ready().mark_won(user=self.user, project=bare)
+        self.assertEqual([s.name for s in bare.sections.all()], ['General'])
+
+    def test_a_project_cannot_back_two_opportunities(self):
+        existing = Project.objects.create(name='Ya ejecutada', team=self.team)
+        self._won_ready().mark_won(user=self.user, project=existing)
+        other = Opportunity.objects.create(
+            organization=self.org, client=self.opportunity.client, name='Otra oportunidad')
+
+        with self.assertRaises(ValueError):
+            other.mark_won(user=self.user, project=existing)
+
+    def test_winning_needs_either_a_team_or_a_project(self):
+        with self.assertRaises(ValueError):
+            self._won_ready().mark_won(user=self.user)
+
+
+class ProvisionAndCommissionTests(APITestCase):
+    """Expenses that consume an estimate, and the seller's share of the profit."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        self.customer = Client.objects.create(organization=self.org, name='Cliente de Prueba S.A.')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=self.customer, name='Mantención estación',
+        )
+        area = Area.objects.create(name='Proyectos', organization=self.org)
+        self.team = Team.objects.create(name='Terreno', area=area)
+
+    # Sale of 2.000.000 on a cost of 1.000.000, plus 500.000 of operating
+    # expenses carried as an internal provision: cost 1.500.000, profit 500.000.
+    SALE = {'description': 'Mantención', 'category': 'equipo', 'quantity': 1,
+            'unit_cost': '1000000', 'margin': '1.0'}
+    PROVISION = {'description': 'Gastos operacionales', 'category': 'gasto', 'quantity': 1,
+                 'unit_cost': '500000', 'is_internal': True, 'is_provision': True}
+
+    def _quote(self, items=None, opportunity=None, **extra):
+        payload = {'opportunity': (opportunity or self.opportunity).id, 'status': 'approved',
+                   'issue_date': '2026-08-07',
+                   'items': items if items is not None else [self.SALE, self.PROVISION]}
+        payload.update(extra)
+        response = self.client.post('/api/quotes/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def _project(self, **quote_extra):
+        self._quote(**quote_extra)
+        return self.opportunity.mark_won(team=self.team, user=self.user)
+
+    def _spend(self, project, amount, category='gasto', description='Viáticos'):
+        response = self.client.post('/api/project-expenses/', {
+            'project': project.id, 'description': description,
+            'category': category, 'amount': amount,
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def _costs(self, project):
+        return self.client.get(f'/api/projects/{project.id}/costs/').data
+
+    # ── provisions ─────────────────────────────────────────────────────────
+    def test_a_provision_is_counted_in_the_quote_and_in_its_category(self):
+        quote = self._quote()
+
+        self.assertEqual(str(quote['provision_total']), '500000.00')
+        rows = {row['category']: row for row in quote['category_totals']}
+        self.assertEqual(str(rows['gasto']['provision']), '500000.00')
+        self.assertEqual(str(rows['equipo']['provision']), '0.00')
+
+    def test_a_provision_needs_its_estimated_cost(self):
+        response = self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id,
+            'items': [{'description': 'Gastos', 'quantity': 1, 'unit_price': '500000',
+                       'is_provision': True}],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_a_provision_may_also_be_charged_to_the_client(self):
+        """Internal and provision are independent: some deals sell the expenses."""
+        charged = dict(self.PROVISION, is_internal=False, margin='0.2')
+        quote = self._quote([self.SALE, charged])
+
+        self.assertEqual(str(quote['provision_total']), '500000.00')
+        self.assertEqual(str(quote['subtotal']), '2600000.00')
+        shown = self.client.get(f'/api/quotes/{quote["id"]}/client-view/').data['quote']
+        self.assertEqual(len(shown['items']), 2)
+
+    def test_winning_stamps_the_provision_on_the_project(self):
+        project = self._project()
+
+        self.assertEqual(str(project.budget_provision), '500000.00')
+        gasto = [r for r in project.budget_categories if r['category'] == 'gasto'][0]
+        self.assertEqual(gasto['provision'], '500000.00')
+
+    def test_expenses_replace_the_provision_instead_of_adding_to_it(self):
+        """The trip was already inside the 500.000; counting both is counting it twice."""
+        project = self._project()
+        self._spend(project, '185000')
+
+        summary = self._costs(project)
+
+        self.assertEqual(str(summary['extra_cost']), '185000.00')
+        # 1.500.000 budgeted, less the 500.000 estimate, plus the 185.000 really spent.
+        self.assertEqual(str(summary['real_cost']), '1185000.00')
+        self.assertEqual(str(summary['provision_balance']), '315000.00')
+
+    def test_spending_less_than_the_provision_leaves_the_margin_better_than_quoted(self):
+        project = self._project()
+        self._spend(project, '185000')
+
+        summary = self._costs(project)
+
+        self.assertGreater(summary['real_margin'], summary['quoted_margin'])
+        self.assertEqual(str(summary['real_profit']), '815000.00')
+
+    def test_spending_past_the_provision_adds_to_the_cost(self):
+        """An overrun still shows: the tyre that the estimate did not cover."""
+        project = self._project()
+        self._spend(project, '600000')
+
+        summary = self._costs(project)
+
+        self.assertEqual(str(summary['real_cost']), '1600000.00')
+        self.assertEqual(str(summary['provision_balance']), '-100000.00')
+
+    def test_the_category_table_adds_up_to_the_real_cost(self):
+        project = self._project()
+        self._spend(project, '100000', category='gasto')
+        self._spend(project, '30000', category='flete', description='Peajes')
+
+        summary = self._costs(project)
+
+        rows = {row['category']: row for row in summary['by_category']}
+        # The estimate is replaced by what was spent in that category.
+        self.assertEqual(str(rows['gasto']['budget']), '500000.00')
+        self.assertEqual(str(rows['gasto']['provision']), '500000.00')
+        self.assertEqual(str(rows['gasto']['real']), '100000.00')
+        # An unbudgeted category still shows.
+        self.assertEqual(str(rows['flete']['real']), '30000.00')
+        self.assertEqual(str(rows['equipo']['real']), '1000000.00')
+        self.assertEqual(sum(row['real'] for row in summary['by_category']),
+                         summary['real_cost'])
+
+    def test_a_project_quoted_without_a_provision_still_adds_expenses_on_top(self):
+        other = Opportunity.objects.create(
+            organization=self.org, client=self.customer, name='Sin provisión')
+        self._quote([self.SALE], opportunity=other)
+        project = other.mark_won(team=self.team, user=self.user)
+        self._spend(project, '185000')
+
+        summary = self._costs(project)
+
+        self.assertEqual(str(summary['provision']), '0.00')
+        self.assertEqual(str(summary['real_cost']), '1185000.00')
+
+    # ── the seller's commission ────────────────────────────────────────────
+    def test_the_commission_is_a_share_of_the_profit(self):
+        quote = self._quote(commission_rate='10', commission_to='Vendedor de Prueba')
+
+        # Profit is 2.000.000 of sale less 1.500.000 of cost.
+        self.assertEqual(str(quote['total_profit']), '500000.00')
+        self.assertEqual(str(quote['commission_amount']), '50000.00')
+        self.assertEqual(str(quote['net_profit']), '450000.00')
+        self.assertEqual(quote['commission_to'], 'Vendedor de Prueba')
+
+    def test_the_commission_does_not_change_the_margin(self):
+        """The spreadsheet shows it under the profit, so the margin keeps its meaning."""
+        plain = self._quote()
+        with_commission = self._quote(commission_rate='10')
+
+        self.assertEqual(str(plain['margin']), str(with_commission['margin']))
+        self.assertEqual(str(with_commission['total_cost']), '1500000.00')
+
+    def test_a_deal_that_loses_money_owes_no_commission(self):
+        quote = self._quote([dict(self.SALE, margin='0.0'), self.PROVISION],
+                            commission_rate='10')
+
+        self.assertEqual(str(quote['total_profit']), '-500000.00')
+        self.assertEqual(str(quote['commission_amount']), '0.00')
+        self.assertEqual(str(quote['net_profit']), '-500000.00')
+
+    def test_the_commission_never_reaches_the_client(self):
+        quote = self._quote(commission_rate='10', commission_to='Vendedor de Prueba')
+
+        shown = self.client.get(f'/api/quotes/{quote["id"]}/client-view/').data['quote']
+
+        self.assertNotIn('commission', str(shown))
+        self.assertNotIn('Vendedor de Prueba', str(shown))
+        self.assertNotIn('net_profit', shown)
+        self.assertNotIn('provision', str(shown))
+
+    def test_a_commission_rate_outside_zero_to_a_hundred_is_refused(self):
+        for rate in ('150', '-5'):
+            response = self.client.post('/api/quotes/', {
+                'opportunity': self.opportunity.id, 'commission_rate': rate,
+                'items': [self.SALE],
+            }, format='json')
+            self.assertEqual(response.status_code, 400, rate)
+
+    def test_the_project_freezes_the_commission_it_was_sold_under(self):
+        project = self._project(commission_rate='10', commission_to='Vendedor de Prueba')
+        quote = Quote.objects.get()
+
+        self.client.patch(f'/api/quotes/{quote.id}/', {'commission_rate': '25'}, format='json')
+
+        project.refresh_from_db()
+        self.assertEqual(str(project.commission_rate), '10.00')
+        self.assertEqual(project.commission_to, 'Vendedor de Prueba')
+
+    def test_the_commission_follows_the_real_profit(self):
+        project = self._project(commission_rate='10', commission_to='Vendedor de Prueba')
+        self._spend(project, '185000')
+
+        summary = self._costs(project)
+
+        self.assertEqual(str(summary['budget_commission']), '50000.00')
+        self.assertEqual(str(summary['quoted_net_profit']), '450000.00')
+        # Spent less than estimated, so the profit grows and the commission with it.
+        self.assertEqual(str(summary['real_profit']), '815000.00')
+        self.assertEqual(str(summary['real_commission']), '81500.00')
+        self.assertEqual(str(summary['real_net_profit']), '733500.00')
+
+    def test_an_overrun_that_erases_the_profit_erases_the_commission(self):
+        project = self._project(commission_rate='10')
+        self._spend(project, '2000000')
+
+        summary = self._costs(project)
+
+        self.assertEqual(str(summary['real_profit']), '-1000000.00')
+        self.assertEqual(str(summary['real_commission']), '0.00')
+        self.assertEqual(str(summary['real_net_profit']), '-1000000.00')
+
+
+class ProjectClosingAndSummaryTests(APITestCase):
+    """The page read when the work is over, and the books being shut."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='Empresa A', slug='empresa-a')
+        self.user = User.objects.create_user(
+            username='vendedor', password='secret', organization=self.org, is_sales=True,
+        )
+        self.staff = User.objects.create_user(
+            username='jefa', password='secret', organization=self.org, is_staff=True,
+        )
+        self.technician = User.objects.create_user(
+            username='tecnico', password='secret', organization=self.org,
+        )
+        self.client.login(username='vendedor', password='secret')
+
+        ExchangeRate.objects.create(organization=self.org, date='2026-06-25', uf=Decimal('40000'))
+        self.customer = Client.objects.create(organization=self.org, name='Cliente de Prueba S.A.')
+        self.opportunity = Opportunity.objects.create(
+            organization=self.org, client=self.customer, name='Mantención estación',
+        )
+        area = Area.objects.create(name='Proyectos', organization=self.org)
+        self.team = Team.objects.create(name='Terreno', area=area)
+        self.team.members.add(self.technician)
+
+        # Sale of 2.000.000 over a cost of 1.000.000, 500.000 of it a provision.
+        response = self.client.post('/api/quotes/', {
+            'opportunity': self.opportunity.id, 'status': 'approved',
+            'issue_date': '2026-08-07', 'display_currency': 'UF',
+            'commission_rate': '10', 'commission_to': 'Vendedor de Prueba',
+            'items': [
+                {'description': 'Mantención', 'category': 'servicio', 'quantity': 1,
+                 'unit_cost': '1000000', 'margin': '1.0'},
+                {'description': 'Gastos operacionales', 'category': 'gasto', 'quantity': 1,
+                 'unit_cost': '500000', 'is_internal': True, 'is_provision': True},
+            ],
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.project = self.opportunity.mark_won(team=self.team, user=self.user)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+    def _spend(self, amount, day='2026-10-19', category='gasto', description='Viáticos',
+               project=None):
+        return self.client.post('/api/project-expenses/', {
+            'project': (project or self.project).id, 'description': description,
+            'category': category, 'amount': amount, 'incurred_on': day,
+        }, format='json')
+
+    def _summary(self, project=None):
+        return self.client.get(f'/api/projects/{(project or self.project).id}/summary/')
+
+    def _close(self, **payload):
+        return self.client.post(f'/api/projects/{self.project.id}/close/', payload, format='json')
+
+    # ── the summary ────────────────────────────────────────────────────────
+    def test_the_summary_gathers_the_whole_picture(self):
+        self._spend('185000', day='2026-10-19', description='Alojamiento')
+        self._spend('15000', day='2026-10-21', description='Peajes', category='flete')
+        self._spend('40000', day='2026-10-19', description='Cena')
+        Asset.objects.create(project=self.project, name='Informe de mantención.pdf',
+                             asset_type='file', uploaded_by=self.user)
+
+        summary = self._summary().data
+
+        self.assertEqual(summary['project']['name'], self.project.name)
+        self.assertEqual(summary['project']['team'], 'Terreno')
+        self.assertEqual(summary['deal']['client'], 'Cliente de Prueba S.A.')
+        self.assertEqual(summary['deal']['quote']['number'], 1)
+        self.assertEqual(summary['period']['days'], 3)
+        self.assertEqual(str(summary['period']['from']), '2026-10-19')
+        self.assertEqual(str(summary['period']['to']), '2026-10-21')
+        self.assertEqual(summary['expenses']['count'], 3)
+        self.assertEqual(str(summary['expenses']['total']), '240000.00')
+        self.assertEqual([documento['name'] for documento in summary['documents']],
+                         ['Informe de mantención.pdf'])
+        self.assertEqual(summary['tasks'], {'total': 0, 'completed': 0})
+
+    def test_the_result_is_the_same_figures_the_costs_tab_shows(self):
+        self._spend('185000')
+
+        summary = self._summary().data
+        costs = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+
+        for key in ('budget_cost', 'real_cost', 'real_profit', 'real_commission',
+                    'real_net_profit', 'provision_balance'):
+            self.assertEqual(summary['result'][key], costs[key], key)
+
+    def test_expenses_are_listed_by_day_in_order_and_the_largest_first(self):
+        self._spend('40000', day='2026-10-20', description='Cena')
+        self._spend('185000', day='2026-10-19', description='Alojamiento')
+        self._spend('15000', day='2026-10-20', description='Peajes')
+
+        expenses = self._summary().data['expenses']
+
+        self.assertEqual([str(day['date']) for day in expenses['by_day']],
+                         ['2026-10-19', '2026-10-20'])
+        self.assertEqual(str(expenses['by_day'][1]['total']), '55000.00')
+        self.assertEqual(expenses['by_day'][1]['count'], 2)
+        self.assertEqual([item['description'] for item in expenses['largest']],
+                         ['Alojamiento', 'Cena', 'Peajes'])
+
+    def test_the_sale_reads_in_the_currency_the_quote_was_made_in(self):
+        """2.000.000 pesos at 40.000 a UF is 50 UF, which is how the client reads it."""
+        quote = self._summary().data['deal']['quote']
+
+        self.assertEqual(quote['display_currency'], 'UF')
+        self.assertEqual(str(quote['sale_in_display_currency']), '50.00')
+
+    def test_a_project_with_no_deal_still_has_a_summary(self):
+        bare = Project.objects.create(name='Sin trato', team=self.team)
+
+        summary = self._summary(bare).data
+
+        self.assertIsNone(summary['deal'])
+        self.assertEqual(summary['expenses']['count'], 0)
+        self.assertIsNone(summary['period']['from'])
+        self.assertEqual(summary['period']['days'], 0)
+
+    # ── closing ────────────────────────────────────────────────────────────
+    def test_closing_records_the_day_the_person_and_what_was_concluded(self):
+        response = self._close(closed_on='2026-10-23', notes='Se cumplió el alcance.')
+
+        self.assertEqual(response.status_code, 200)
+        project = response.data['project']
+        self.assertTrue(project['is_closed'])
+        self.assertEqual(str(project['closed_on']), '2026-10-23')
+        self.assertEqual(project['closed_by_name'], 'vendedor')
+        self.assertEqual(project['closing_notes'], 'Se cumplió el alcance.')
+        costs = self.client.get(f'/api/projects/{self.project.id}/costs/').data
+        self.assertTrue(costs['is_closed'])
+
+    def test_closing_without_a_date_means_today(self):
+        response = self._close()
+
+        self.assertEqual(response.data['project']['closed_on'], timezone.localdate())
+
+    def test_an_invalid_closing_date_is_refused(self):
+        for bad in ('2026-02-31', 'ayer'):
+            self.assertEqual(self._close(closed_on=bad).status_code, 400, bad)
+        self.project.refresh_from_db()
+        self.assertFalse(self.project.is_closed)
+
+    def test_a_closed_project_cannot_be_closed_again(self):
+        self._close()
+
+        self.assertEqual(self._close().status_code, 400)
+
+    def test_the_figures_do_not_change_when_the_project_closes(self):
+        self._spend('185000')
+        before = self._summary().data['result']
+
+        self._close()
+        after = self._summary().data['result']
+
+        for key in ('real_cost', 'real_profit', 'real_commission', 'real_net_profit'):
+            self.assertEqual(before[key], after[key], key)
+
+    # ── the books are shut ─────────────────────────────────────────────────
+    def test_a_closed_project_takes_no_new_expenses(self):
+        self._close()
+
+        response = self._spend('50000')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('cerrado', str(response.data))
+        self.assertEqual(self.project.expenses.count(), 0)
+
+    def test_a_closed_project_does_not_let_an_expense_be_changed_or_deleted(self):
+        expense = self._spend('185000').data
+        self._close()
+
+        patched = self.client.patch(f'/api/project-expenses/{expense["id"]}/',
+                                    {'amount': '1'}, format='json')
+        deleted = self.client.delete(f'/api/project-expenses/{expense["id"]}/')
+
+        self.assertEqual(patched.status_code, 400)
+        self.assertEqual(deleted.status_code, 400)
+        self.assertEqual(str(self.project.expenses.get().amount), '185000.00')
+
+    def test_an_expense_cannot_be_moved_into_a_closed_project(self):
+        other = Project.objects.create(name='Otro cerrado', team=self.team,
+                                       closed_on=timezone.localdate())
+        expense = self._spend('185000').data
+
+        response = self.client.patch(f'/api/project-expenses/{expense["id"]}/',
+                                     {'project': other.id}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_reopening_lets_expenses_in_again_and_keeps_the_conclusions(self):
+        self._close(notes='Conclusiones escritas.')
+
+        reopened = self.client.post(f'/api/projects/{self.project.id}/reopen/')
+
+        self.assertEqual(reopened.status_code, 200)
+        self.assertFalse(reopened.data['project']['is_closed'])
+        self.assertIsNone(reopened.data['project']['closed_on'])
+        self.assertEqual(reopened.data['project']['closing_notes'], 'Conclusiones escritas.')
+        self.assertEqual(self._spend('30000').status_code, 201)
+
+    def test_an_open_project_cannot_be_reopened(self):
+        response = self.client.post(f'/api/projects/{self.project.id}/reopen/')
+
+        self.assertEqual(response.status_code, 400)
+
+    # ── who can see and do this ────────────────────────────────────────────
+    def test_the_team_that_executes_cannot_read_or_close_the_summary(self):
+        self.client.logout()
+        self.client.login(username='tecnico', password='secret')
+
+        self.assertEqual(self._summary().status_code, 403)
+        self.assertEqual(self._close().status_code, 403)
+        self.assertEqual(
+            self.client.post(f'/api/projects/{self.project.id}/reopen/').status_code, 403)
+
+    def test_another_company_cannot_reach_the_summary(self):
+        other = Organization.objects.create(name='Empresa B', slug='empresa-b')
+        User.objects.create_user(username='intruso', password='secret',
+                                 organization=other, is_sales=True)
+        self.client.logout()
+        self.client.login(username='intruso', password='secret')
+
+        self.assertEqual(self._summary().status_code, 404)
+        self.assertEqual(self._close().status_code, 404)
+
+    def test_the_plain_project_endpoint_neither_shows_nor_accepts_the_closing(self):
+        """Every member of the team reads that endpoint; the closing is not theirs."""
+        self.client.logout()
+        self.client.login(username='jefa', password='secret')
+
+        shown = self.client.get(f'/api/projects/{self.project.id}/').data
+        self.client.patch(f'/api/projects/{self.project.id}/',
+                          {'closed_on': '2026-10-23'}, format='json')
+
+        self.assertNotIn('closed_on', shown)
+        self.assertNotIn('closing_notes', shown)
+        self.project.refresh_from_db()
+        self.assertFalse(self.project.is_closed)

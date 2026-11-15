@@ -43,6 +43,9 @@ Construido con Django REST Framework y React.
 - Fecha de emisión, validez y aviso de vencida
 - Costo, utilidad y margen calculados en el servidor; los montos que envía el cliente se ignoran
 - **Categoría por línea** (equipo · servicio propio · gasto operacional · flete · prevención y EPP), heredada del catálogo y ajustable por trato
+- **Líneas de costo interno**: un costo que la empresa asume en el trato (sueldos y bonos de quienes van a terreno, gastos operacionales). Cuenta en el costo y por lo tanto baja el margen, pero **no se cobra y no sale en el documento del cliente**. La planilla EF lo escribe como margen de −100%; acá es un tipo de línea, porque una línea en $0 en un documento que lee el cliente avisaría lo que no debe
+- **Comisión del vendedor**: un porcentaje de la **utilidad**, no de la venta, y sin comisión negativa si el trato pierde plata. Se muestra debajo de la utilidad, como en la planilla EF, así que **no altera el margen**. Nunca sale en el documento del cliente
+- **Provisión**: una línea puede marcarse como provisión, independiente de si es interna. Al ganar el trato el proyecto sella cuánto del presupuesto es estimación
 - **Composición del costo**: costo, venta y margen abiertos por categoría, en vivo mientras se cotiza y guardados con el documento. Un margen mezclado de 49% esconde que los equipos rindieron 38%, la mano de obra 180% y los gastos se cotizaron casi a costo
 - Reclasificar el catálogo **no altera** las cotizaciones ya emitidas: la categoría se copia al cotizar, igual que la descripción y el precio
 - Lectura en CLP, USD, EUR o UF con la tasa con que se emitió
@@ -54,11 +57,23 @@ Construido con Django REST Framework y React.
 - Cada bloque se lleva a la cotización como su propia línea con su categoría — "Gastos de viaje" y "Flete" separados, como los escribe la hoja Cálculo
 - Es **solo costo**: lo que se cobra por esos gastos lo decide el margen de la línea. Borrar una hoja no toca las cotizaciones que produjo
 
+**Conceptos de gasto**
+- Lo que se paga seguido ejecutando (alojamiento, camioneta, prevencionista, EPP...). **No guardan un precio**: hoteles y arriendos cambian, así que guardan los valores con su fecha
+- Al armar una hoja de gastos se parte de un concepto y se ve el **último valor conocido y qué tan viejo es**. Pasados 90 días se marca desactualizado; nunca se reemplaza solo
+- La referencia **la manda la fecha en que el valor fue cierto**, no cuándo se tecleó: una boleta cargada tarde no pisa una cotización más nueva
+- Lo que se escribe en una hoja queda como valor de referencia. Si se vuelve a escribir un valor viejo, se da por confirmado y su edad vuelve a cero
+- Un gasto real puede indicar qué compró y cuántas unidades (260.000 por 4 días = 65.000 por día) y **enseña el valor real** al concepto. Corregir o borrar el gasto corrige o borra ese valor
+- "Cargar conceptos básicos" crea los habituales **sin valor**: ninguno tiene precio fijo
+
 **Costos de ejecución**
 - Al ganar la oportunidad, el proyecto **sella el presupuesto** de la cotización con que se cerró — totales y desglose por categoría. Editar o borrar esa cotización después no mueve la vara
+- Una oportunidad puede ganarse **sobre un proyecto que ya existe** (`mark_won(project=...)`): sirve para cargar trabajo ya ejecutado. El proyecto toma el presupuesto de la cotización, no se pisa su descripción y un proyecto no puede respaldar dos oportunidades
 - Los gastos que aparecen ejecutando se registran en el proyecto con fecha, categoría, proveedor y documento
 - **Son siempre costo de la empresa**, nunca del cliente: la venta la fijó un documento ya aceptado, así que cada gasto sale de la utilidad. Por eso no existe una marca de "recuperable"
-- Los gastos van **encima** del presupuesto, no en lugar de él: nadie va a volver a teclear el datalogger que ya cotizó
+- Los gastos van **encima** del presupuesto: nadie va a volver a teclear el datalogger que ya cotizó. **Salvo que la cotización tenga una provisión**: una línea marcada como provisión (típicamente los gastos operacionales) es una estimación que los gastos reales **reemplazan**, porque estaban dentro de ella. Sumar ambos contaría el mismo viaje dos veces. Lo que se gasta por sobre la provisión sí sube el costo, que es como aparece un imprevisto como el neumático
+- **Resumen del proyecto**: una página que junta lo que está repartido entre la cotización, los gastos y los archivos: el trato, qué se hizo, cotizado contra real (venta, costo, utilidad, margen, comisión y utilidad neta), gastos por categoría y por día, los mayores, documentos y conclusiones. Se calcula siempre desde los registros, así que no puede discrepar de ellos
+- **Cerrar un proyecto** marca el día y quién, guarda las conclusiones y **deja de aceptar gastos** (ni nuevos, ni editar, ni borrar, ni mover). Las cifras no cambian. Se puede reabrir, y las conclusiones se conservan. El resumen y el cierre son solo para staff o ventas
+- La pestaña Costos muestra cuánto queda de la provisión, el costo real por categoría y la comisión del vendedor contra la utilidad real
 - La pestaña **Costos** del proyecto muestra margen cotizado → margen real, y el presupuestado contra el real por categoría. Solo la ve staff o ventas; el equipo que ejecuta abre el proyecto pero no lo que deja
 
 **Documento para el cliente**
@@ -247,6 +262,7 @@ conversión de monedas con Incoterm y el historial de precios.
 | Tipos de cambio | `/api/exchange-rates/` | |
 | Hojas de gastos | `/api/expense-sheets/` | `?opportunity=` |
 | Gastos de ejecución | `/api/project-expenses/` | `?project=` |
+| Conceptos de gasto | `/api/expense-concepts/` | `?block=`, `?active=1` |
 | Plantilla de cotización | `/api/quote-template/` | GET todos, PUT/PATCH solo staff |
 
 ### Acciones especiales
@@ -256,6 +272,10 @@ conversión de monedas con Incoterm y el historial de precios.
 | POST | `/api/tasks/{id}/reject/` | Rechazar asignación |
 | GET | `/api/tasks/pending_assignments/` | Mis asignaciones pendientes |
 | POST | `/api/tasks/reorder/` | Reordenar tareas |
+| GET, POST | `/api/expense-concepts/{id}/rates/` | Historial de valores de un concepto, y agregar uno |
+| POST | `/api/expense-concepts/starter/` | Cargar los conceptos básicos, sin valor |
+| GET | `/api/projects/{id}/summary/` | Resumen general del proyecto (staff o ventas) |
+| POST | `/api/projects/{id}/close/` · `/reopen/` | Cerrar con fecha y conclusiones, o reabrir |
 | GET | `/api/projects/{id}/costs/` | Margen cotizado contra margen real (staff o ventas) |
 | GET | `/api/quotes/{id}/client-view/` | La cotización sin costos ni márgenes |
 | GET | `/api/quotes/{id}/pdf/` | PDF para el cliente (`?download=1` para forzar descarga) |
