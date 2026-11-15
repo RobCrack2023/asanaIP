@@ -1,14 +1,22 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import api from '../api'
 import Modal from './Modal'
 import { formatMoney } from '../stages'
-import { BLOCKS, lineSubtotal } from '../expenses'
+import { BLOCKS, lineSubtotal, ageLabel } from '../expenses'
 import './ExpenseSheetModal.css'
 
 const emptyLine = (block) => ({
-  block, description: '', unit_amount: '', quantity: '1', days: '1',
+  block, concept: null, description: '', unit_amount: '', quantity: '1', days: '1',
 })
+
+// What to tell the person about the value they are about to trust. The point
+// is not the number but how long ago it was true.
+const referenceText = (concept, old) => {
+  if (!concept.latest_amount) return 'Sin valor de referencia: escribe el actual'
+  const base = `Referencia ${formatMoney(concept.latest_amount)} por ${concept.unit} · ${ageLabel(concept.age_days)}`
+  return old ? `${base} — confírmalo con un valor actual` : base
+}
 
 /**
  * The breakdown behind an operating-expense figure.
@@ -24,7 +32,7 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
   const [lines, setLines] = useState(
     sheet?.lines?.length
       ? sheet.lines.map((l) => ({
-          block: l.block, description: l.description,
+          block: l.block, concept: l.concept ?? null, description: l.description,
           unit_amount: String(l.unit_amount), quantity: String(Number(l.quantity)),
           days: String(Number(l.days)),
         }))
@@ -33,6 +41,21 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
   const [copyFrom, setCopyFrom] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [concepts, setConcepts] = useState([])
+
+  useEffect(() => {
+    api.get('/expense-concepts/?active=1').then((res) => setConcepts(res.data))
+  }, [])
+
+  const conceptById = Object.fromEntries(concepts.map((c) => [c.id, c]))
+
+  // A line still holding its concept's stale value is the one to double-check:
+  // once the person types a different number it is no longer the old one.
+  const isOldValue = (line) => {
+    const concept = conceptById[line.concept]
+    return !!concept && concept.is_stale
+      && Number(line.unit_amount) === Number(concept.latest_amount)
+  }
 
   const addLine = (block) => setLines((prev) => [...prev, emptyLine(block)])
 
@@ -41,6 +64,17 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
 
   const removeLine = (index) => setLines((prev) => prev.filter((_, i) => i !== index))
 
+  // Starts the line from what the company last knew; the person then types
+  // today's price if it moved.
+  const addFromConcept = (block, conceptId) => {
+    const concept = conceptById[conceptId]
+    if (!concept) return
+    setLines((prev) => [...prev, {
+      ...emptyLine(block), concept: concept.id, description: concept.name,
+      unit_amount: concept.latest_amount ? String(Number(concept.latest_amount)) : '',
+    }])
+  }
+
   // Copying an old sheet in replaces what is on screen; the estimate is rarely
   // new, and starting from the last project beats starting from memory.
   const applyCopy = (sheetId) => {
@@ -48,7 +82,7 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
     const source = sheets.find((s) => String(s.id) === String(sheetId))
     if (!source?.lines?.length) return
     setLines(source.lines.map((l) => ({
-      block: l.block, description: l.description,
+      block: l.block, concept: l.concept ?? null, description: l.description,
       unit_amount: String(l.unit_amount), quantity: String(Number(l.quantity)),
       days: String(Number(l.days)),
     })))
@@ -75,6 +109,7 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
         notes,
         lines: filled.map((l, index) => ({
           block: l.block,
+          concept: l.concept ?? null,
           description: l.description.trim(),
           unit_amount: Number(l.unit_amount) || 0,
           quantity: Number(l.quantity) || 1,
@@ -127,6 +162,7 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
           const blockLines = lines
             .map((line, index) => ({ line, index }))
             .filter(({ line }) => line.block === block.value)
+          const blockConcepts = concepts.filter((c) => c.block === block.value)
 
           return (
             <div key={block.value} className="es-block">
@@ -150,12 +186,20 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
                   </div>
                   {blockLines.map(({ line, index }) => (
                     <div key={index} className="es-line">
-                      <input
-                        value={line.description}
-                        onChange={(e) => updateLine(index, 'description', e.target.value)}
-                        placeholder="Ej: Alojamiento"
-                      />
+                      <div className="es-desc">
+                        <input
+                          value={line.description}
+                          onChange={(e) => updateLine(index, 'description', e.target.value)}
+                          placeholder="Ej: Alojamiento"
+                        />
+                        {conceptById[line.concept] && (
+                          <span className={`es-ref ${isOldValue(line) ? 'stale' : ''}`}>
+                            {referenceText(conceptById[line.concept], isOldValue(line))}
+                          </span>
+                        )}
+                      </div>
                       <input type="number" min="0" step="any" value={line.unit_amount}
+                             className={isOldValue(line) ? 'stale' : ''}
                              onChange={(e) => updateLine(index, 'unit_amount', e.target.value)}
                              placeholder="0" />
                       <input type="number" min="0" step="any" value={line.quantity}
@@ -172,9 +216,28 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
                 </div>
               )}
 
-              <button type="button" className="field-link" onClick={() => addLine(block.value)}>
-                <Plus size={12} /> Agregar a {block.label.toLowerCase()}
-              </button>
+              <div className="es-add-row">
+                <button type="button" className="field-link" onClick={() => addLine(block.value)}>
+                  <Plus size={12} /> Agregar a {block.label.toLowerCase()}
+                </button>
+                {blockConcepts.length > 0 && (
+                  <select
+                    className="es-concept-picker"
+                    value=""
+                    onChange={(e) => { addFromConcept(block.value, e.target.value); e.target.value = '' }}
+                  >
+                    <option value="">Partir de un concepto...</option>
+                    {blockConcepts.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.latest_amount
+                          ? ` — ${formatMoney(c.latest_amount)} por ${c.unit} · ${ageLabel(c.age_days)}`
+                          : ' — sin valor'}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
             </div>
           )
         })}
@@ -185,7 +248,8 @@ export default function ExpenseSheetModal({ opportunityId, sheet, sheets = [], o
         </div>
         <p className="es-hint">
           Esto es costo. Lo que se cobra por estos gastos se decide con el margen
-          de la línea, al llevarlos a la cotización.
+          de la línea, al llevarlos a la cotización. Los valores que escribas en
+          líneas de un concepto quedan como referencia para la próxima hoja.
         </p>
 
         <div className="modal-field">

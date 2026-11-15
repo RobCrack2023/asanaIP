@@ -5,6 +5,17 @@ from django.db import models
 from django.utils import timezone
 
 
+def commission_on(profit, rate):
+    """What a seller is owed: a percentage of the profit, never of the sale.
+
+    A deal that loses money owes no commission — and never a negative one,
+    which would turn the seller into a debtor of the company. Kept in one place
+    because the quote and the project both need it, and they must agree.
+    """
+    return (max(Decimal(profit), Decimal('0')) * Decimal(rate) / Decimal('100')).quantize(
+        Decimal('0.01'))
+
+
 def markup(price, cost):
     """Margin the way the evaluación spreadsheets state it: price / cost - 1.
 
@@ -113,6 +124,19 @@ class Project(models.Model):
     #: than read back through a relation for the same reason as the totals:
     #: the quote can be edited or deleted, the promise cannot.
     budget_categories = models.JSONField(default=list, blank=True)
+    #: The part of the budget that is an estimate to be consumed by expenses.
+    budget_provision = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Frozen with the rest: the seller and the rate the deal was sold under.
+    commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    commission_to = models.CharField(max_length=120, blank=True)
+    #: Set when the project is closed: the books are shut, so nothing more is
+    #: recorded against it until it is reopened. Closing changes nothing about
+    #: the figures — the summary reads the same open or closed — it marks the day
+    #: the project stopped moving, and carries what was concluded.
+    closed_on = models.DateField(null=True, blank=True)
+    closed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name='+')
+    closing_notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -123,6 +147,10 @@ class Project(models.Model):
         return self.name
 
     @property
+    def is_closed(self):
+        return self.closed_on is not None
+
+    @property
     def expense_total(self):
         return sum((expense.amount for expense in self.expenses.all()), Decimal('0'))
 
@@ -130,39 +158,65 @@ class Project(models.Model):
     def cost_summary(self):
         """What the deal promised against what it is really costing.
 
-        Expenses are what turned up *on top of* the budget, not a restatement
-        of it: nobody is going to re-enter the datalogger they already quoted,
-        so the real cost is the budget plus what appeared. Reading the
-        expenses as the whole cost would report an absurd margin until every
-        peso of the original quote had been keyed in again.
+        Two kinds of cost sit in a budget. The fixed ones — the datalogger, the
+        labour — are what they were quoted. A provision — the operating expenses —
+        is an estimate standing in for what will be spent: once expenses are
+        recorded they REPLACE it, they are not added to it, or the same trip would
+        be counted twice. Whatever is spent beyond the provision simply adds to
+        the cost, which is how an overrun like the tyre shows up.
 
-        The sale does not move — the client accepted a document — so every
-        extra peso comes straight out of the profit.
+        With no provision the formula collapses to budget plus expenses, so a
+        project quoted without one behaves exactly as before.
+
+        The sale does not move — the client accepted a document — so every extra
+        peso comes straight out of the profit, and the commission, which is a
+        share of that profit, moves with it.
         """
-        extra_cost = self.expense_total
-        real_cost = self.budget_cost + extra_cost
+        spent = self.expense_total
+        provision = self.budget_provision
+        real_cost = self.budget_cost - provision + spent
+
+        quoted_profit = self.budget_sale - self.budget_cost
+        real_profit = self.budget_sale - real_cost
+        budget_commission = commission_on(quoted_profit, self.commission_rate)
+        real_commission = commission_on(real_profit, self.commission_rate)
+
         return {
             'budget_cost': self.budget_cost,
-            'extra_cost': extra_cost,
+            'extra_cost': spent,
             'real_cost': real_cost,
             'budget_sale': self.budget_sale,
             'quoted_margin': markup(self.budget_sale, self.budget_cost),
             'real_margin': markup(self.budget_sale, real_cost),
-            'quoted_profit': self.budget_sale - self.budget_cost,
-            'real_profit': self.budget_sale - real_cost,
+            'quoted_profit': quoted_profit,
+            'real_profit': real_profit,
+            # What is left of the estimate. Negative means the expenses went past it.
+            'provision': provision,
+            'provision_balance': provision - spent,
+            'commission_rate': self.commission_rate,
+            'commission_to': self.commission_to,
+            'budget_commission': budget_commission,
+            'real_commission': real_commission,
+            'quoted_net_profit': quoted_profit - budget_commission,
+            'real_net_profit': real_profit - real_commission,
             'by_category': self.cost_by_category,
+            'is_closed': self.is_closed,
+            'closed_on': self.closed_on,
         }
 
     @property
     def cost_by_category(self):
-        """Budgeted, plus what turned up, per kind of cost.
+        """Budgeted, provisioned, spent, and what that adds up to, per kind of cost.
 
         The budget side comes from the quote's own split, so the comparison
         runs on the same categories the deal was priced with — and an expense
         in a category nobody budgeted for still shows, which is the whole
-        point of recording the tyre.
+        point of recording the tyre. The real cost of a category is its budget,
+        less the part that was only an estimate, plus what was actually spent.
         """
         budget = {row['category']: Decimal(row['cost']) for row in self.budget_categories}
+        provisioned = {row['category']: Decimal(row.get('provision', '0'))
+                       for row in self.budget_categories}
 
         spent = {}
         for expense in self.expenses.all():
@@ -178,13 +232,15 @@ class Project(models.Model):
             if category not in budget and category not in spent:
                 continue
             budgeted = budget.get(category, nothing)
+            estimate = provisioned.get(category, nothing)
             extra = spent.get(category, nothing)
             rows.append({
                 'category': category,
                 'label': labels[category],
                 'budget': budgeted,
+                'provision': estimate,
                 'extra': extra,
-                'real': budgeted + extra,
+                'real': budgeted - estimate + extra,
             })
         return rows
 
@@ -197,9 +253,13 @@ class Project(models.Model):
         # Decimals are not JSON, and the strings are read back as Decimal
         # rather than float so the comparison never drifts by a cent.
         self.budget_categories = [
-            {'category': row['category'], 'label': row['label'], 'cost': str(row['cost'])}
+            {'category': row['category'], 'label': row['label'], 'cost': str(row['cost']),
+             'provision': str(row['provision'])}
             for row in quote.category_totals
         ]
+        self.budget_provision = quote.provision_total
+        self.commission_rate = quote.commission_rate
+        self.commission_to = quote.commission_to
 
 
 class Section(models.Model):
@@ -684,25 +744,42 @@ class Opportunity(models.Model):
         return (self.quotes.filter(status=Quote.Status.APPROVED).first()
                 or self.quotes.first())
 
-    def mark_won(self, team, user=None):
+    def mark_won(self, team=None, user=None, project=None):
+        """Close the deal as won and put a project behind it.
+
+        Normally the project is created here, in `team`. Pass `project` to attach
+        one that already exists instead — work that was done before the deal was
+        recorded, which is how a company starts using the system with real
+        history. Either way the project takes the quote's budget as its yardstick.
+        """
         from django.db import transaction
 
         if self.stage == self.Stage.GANADA:
             return self.project
 
+        if project is None and team is None:
+            raise ValueError('Hace falta un equipo para crear el proyecto.')
+        if project is not None:
+            taken = Opportunity.objects.filter(project=project).exclude(pk=self.pk)
+            if taken.exists():
+                raise ValueError('Ese proyecto ya está vinculado a otra oportunidad.')
+
         with transaction.atomic():
             previous = self.stage
-            project = Project(
-                name=self.name,
-                description=f'Proyecto generado desde la oportunidad "{self.name}" ({self.client.name}).',
-                team=team,
-                owner=user or self.owner,
-            )
+            created = project is None
+            if created:
+                project = Project(
+                    name=self.name,
+                    description=f'Proyecto generado desde la oportunidad "{self.name}" ({self.client.name}).',
+                    team=team,
+                    owner=user or self.owner,
+                )
             # The project inherits what the deal promised, so what it ends up
             # costing can be held against something.
             project.stamp_budget(self.winning_quote)
             project.save()
-            section = Section.objects.create(name='General', project=project, order=0)
+            section = project.sections.first() or Section.objects.create(
+                name='General', project=project, order=0)
             self.tasks.update(section=section)
             self.project = project
             self.stage = self.Stage.GANADA
@@ -710,7 +787,8 @@ class Opportunity(models.Model):
             OpportunityActivity.objects.create(
                 opportunity=self,
                 kind=OpportunityActivity.Kind.WON,
-                body=f'Proyecto "{project.name}" creado en el equipo {team.name}.',
+                body=(f'Proyecto "{project.name}" creado en el equipo {team.name}.'
+                      if created else f'Proyecto "{project.name}" vinculado.'),
                 from_stage=previous,
                 to_stage=self.stage,
                 author=user,
@@ -781,6 +859,11 @@ class Quote(models.Model):
     total_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Share of the profit owed to whoever sold the deal, as a percentage like
+    #: tax_rate. Internal: it never appears on the client's document. Free text
+    #: for the seller because the person is not necessarily a user of the system.
+    commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    commission_to = models.CharField(max_length=120, blank=True)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -846,6 +929,31 @@ class Quote(models.Model):
         return markup(self.subtotal, self.total_cost)
 
     @property
+    def commission_amount(self):
+        """Owed to the seller: the rate over the profit, before the commission.
+
+        The evaluación spreadsheet does the same: it shows the commission under
+        the profit instead of subtracting it from the cost, so the margin keeps
+        meaning what it always meant.
+        """
+        return commission_on(self.total_profit, self.commission_rate)
+
+    @property
+    def net_profit(self):
+        """What is left once the seller has been paid."""
+        return self.total_profit - self.commission_amount
+
+    @property
+    def provision_total(self):
+        return sum((item.cost_subtotal for item in self.items.all() if item.is_provision),
+                   Decimal('0')).quantize(Decimal('0.01'))
+
+    @property
+    def client_items(self):
+        """The lines the client is shown. Internal costs never leave the company."""
+        return [item for item in self.items.all() if not item.is_internal]
+
+    @property
     def category_totals(self):
         """Cost, sale and margin split by kind of cost.
 
@@ -857,9 +965,12 @@ class Quote(models.Model):
         buckets = {}
         for item in self.items.all():
             bucket = buckets.setdefault(item.category, {'cost': Decimal('0'),
-                                                        'sale': Decimal('0')})
+                                                        'sale': Decimal('0'),
+                                                        'provision': Decimal('0.00')})
             bucket['cost'] += item.cost_subtotal
             bucket['sale'] += item.subtotal
+            if item.is_provision:
+                bucket['provision'] += item.cost_subtotal
 
         total_cost = sum((b['cost'] for b in buckets.values()), Decimal('0'))
         total_sale = sum((b['sale'] for b in buckets.values()), Decimal('0'))
@@ -875,6 +986,7 @@ class Quote(models.Model):
                 'label': labels[category],
                 'cost': bucket['cost'],
                 'sale': bucket['sale'],
+                'provision': bucket['provision'],
                 'profit': bucket['sale'] - bucket['cost'],
                 'margin': markup(bucket['sale'], bucket['cost']),
                 # Share of the deal, so "where does the money go" is readable
@@ -926,6 +1038,19 @@ class QuoteItem(models.Model):
     margin = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    #: A cost the company carries on this deal without charging for it: the
+    #: salaries and bonuses of the people sent, the operating expenses. It counts
+    #: in the cost and so lowers the margin, but it has no price and is never
+    #: shown to the client. The evaluación spreadsheet writes these as a margin
+    #: of -100%; here they are a kind of line instead, because a price of zero
+    #: on a document the client reads would announce what it should not.
+    is_internal = models.BooleanField(default=False)
+    #: A cost estimated up front that real expenses then consume. Operating
+    #: expenses are budgeted as a lump because nobody knows yet whether the trip
+    #: will need two nights or three. Once the project runs, what is actually
+    #: spent replaces the estimate instead of being added to it — otherwise the
+    #: same trip is counted twice, once as the provision and once as the receipts.
+    is_provision = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -955,6 +1080,13 @@ class QuoteItem(models.Model):
 
     def apply_margin(self):
         """Price the line from its cost and margin, when there is a cost."""
+        if self.is_internal:
+            # Nothing is charged, so there is no margin to speak of and no
+            # discount to give.
+            self.unit_price = Decimal('0.00')
+            self.margin = None
+            self.discount_percent = Decimal('0')
+            return self.unit_price
         if self.unit_cost and self.margin is not None:
             self.unit_price = (self.unit_cost * (Decimal('1') + self.margin)).quantize(Decimal('0.01'))
         return self.unit_price
@@ -1091,6 +1223,132 @@ BLOCK_AS_QUOTE_LINE = {
 }
 
 
+#: What a company can load with one click so the list is not empty on day one.
+#: Names and units only — no values, since none of these has a fixed price.
+STARTER_EXPENSE_CONCEPTS = [
+    ('Pasajes', ExpenseBlock.VIAJE, 'tramo'),
+    ('Alojamiento', ExpenseBlock.VIAJE, 'noche'),
+    ('Viáticos', ExpenseBlock.VIAJE, 'día'),
+    ('Flete a terreno', ExpenseBlock.FLETE, 'tramo'),
+    ('Arriendo de camioneta', ExpenseBlock.OPERACIONES, 'día'),
+    ('Prevencionista', ExpenseBlock.OPERACIONES, 'día'),
+    ('EPP', ExpenseBlock.OPERACIONES, 'kit'),
+    ('Herramientas', ExpenseBlock.OPERACIONES, 'proyecto'),
+]
+
+
+class ExpenseConcept(models.Model):
+    """Something the company routinely pays for while executing: a night of
+    lodging, a day of the rented pickup, a safety officer's day, a PPE kit.
+
+    The concept holds no price. Hotels and rentals move with the season and the
+    supplier, so there is no fixed rate to keep — only values that were true on
+    a given day, kept in ExpenseRate. What a concept offers is the last known
+    value and how old it is, which is exactly what someone estimating needs to
+    decide whether to trust it or ask for a fresh quote.
+    """
+
+    #: A value older than this is flagged, never replaced: the same rule the
+    #: exchange rates follow, for the same reason — silently restating figures
+    #: under an estimate in progress would make it impossible to explain later.
+    STALE_AFTER_DAYS = 90
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                                     related_name='expense_concepts')
+    name = models.CharField(max_length=200)
+    #: Where it lands in an expense sheet.
+    block = models.CharField(max_length=12, choices=ExpenseBlock.choices,
+                             default=ExpenseBlock.OPERACIONES)
+    #: What one unit is: noche, día, kit, tramo. Lets a real expense of
+    #: 260.000 for four days be read back as 65.000 a day.
+    unit = models.CharField(max_length=30, default='unidad')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['block', 'name']
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'name'],
+                                    name='unique_expense_concept_per_organization'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def latest_rate(self):
+        """The most recent value by the date it was true, not by when it was typed.
+
+        A receipt entered a month late must not overwrite a newer quote. Reads
+        through rates.all() so a prefetch is honoured and a list of concepts
+        does not cost one query per row.
+        """
+        rates = list(self.rates.all())
+        return rates[0] if rates else None
+
+    @property
+    def age_days(self):
+        latest = self.latest_rate
+        return (timezone.localdate() - latest.date).days if latest else None
+
+    @property
+    def is_stale(self):
+        age = self.age_days
+        return age is not None and age > self.STALE_AFTER_DAYS
+
+    def record_rate(self, unit_amount, source, *, date=None, supplier='', note='',
+                    user=None, expense=None):
+        return ExpenseRate.objects.create(
+            concept=self, unit_amount=unit_amount, source=source,
+            date=date or timezone.localdate(), supplier=supplier, note=note,
+            recorded_by=user, expense=expense,
+        )
+
+    def observe(self, unit_amount, source, *, user=None):
+        """Remember a value seen while estimating — unless it adds nothing.
+
+        Typing the same price that is already on file, and recent, is not news.
+        Typing it again once it has gone stale is: it confirms the value still
+        holds, so it is recorded and the age starts over.
+        """
+        latest = self.latest_rate
+        if latest and latest.unit_amount == unit_amount and not self.is_stale:
+            return None
+        return self.record_rate(unit_amount, source, user=user)
+
+
+class ExpenseRate(models.Model):
+    """What a concept cost on a given day, and how that was learned."""
+
+    class Source(models.TextChoices):
+        ESTIMADO = 'estimado', 'Estimado'
+        COTIZADO = 'cotizado', 'Cotizado'
+        #: Reserved for values that come from an expense registered on a
+        #: project, so the label keeps meaning "money actually paid".
+        REAL = 'real', 'Gasto real'
+
+    concept = models.ForeignKey(ExpenseConcept, on_delete=models.CASCADE,
+                                related_name='rates')
+    unit_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    date = models.DateField(default=timezone.localdate)
+    source = models.CharField(max_length=10, choices=Source.choices, default=Source.ESTIMADO)
+    supplier = models.CharField(max_length=200, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    #: Set when this value was derived from a registered expense. Deleting the
+    #: expense takes its value out of the history with it.
+    expense = models.OneToOneField('ProjectExpense', on_delete=models.CASCADE,
+                                   null=True, blank=True, related_name='rate')
+    recorded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date', '-id']
+
+    def __str__(self):
+        return f'{self.concept.name}: {self.unit_amount} ({self.date})'
+
+
 class ExpenseSheet(models.Model):
     """The breakdown behind an operating-expense figure.
 
@@ -1156,9 +1414,9 @@ class ExpenseSheet(models.Model):
         is still a better starting point than a blank sheet.
         """
         ExpenseLine.objects.bulk_create([
-            ExpenseLine(sheet=self, block=line.block, description=line.description,
-                        unit_amount=line.unit_amount, quantity=line.quantity,
-                        days=line.days, order=line.order)
+            ExpenseLine(sheet=self, block=line.block, concept=line.concept,
+                        description=line.description, unit_amount=line.unit_amount,
+                        quantity=line.quantity, days=line.days, order=line.order)
             for line in other.lines.all()
         ])
 
@@ -1173,6 +1431,10 @@ class ExpenseLine(models.Model):
     sheet = models.ForeignKey(ExpenseSheet, on_delete=models.CASCADE, related_name='lines')
     block = models.CharField(max_length=12, choices=ExpenseBlock.choices,
                              default=ExpenseBlock.OPERACIONES)
+    #: The concept this row was built from, when it was. The amount is still the
+    #: line's own: it holds the value that was used, not a pointer to a price.
+    concept = models.ForeignKey(ExpenseConcept, on_delete=models.SET_NULL, null=True,
+                                blank=True, related_name='lines')
     description = models.CharField(max_length=200)
     unit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
@@ -1213,6 +1475,13 @@ class ProjectExpense(models.Model):
                                 default=CostCategory.GASTO)
     description = models.CharField(max_length=200)
     amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    #: Optional: what this money bought, in the company's own vocabulary. When
+    #: set, the expense also teaches the concept what a unit really cost.
+    concept = models.ForeignKey(ExpenseConcept, on_delete=models.SET_NULL, null=True,
+                                blank=True, related_name='expenses')
+    #: How many units of the concept `amount` covers: four days of the pickup,
+    #: two nights of lodging. The unit value is amount divided by this.
+    units = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     supplier = models.CharField(max_length=200, blank=True)
     #: Invoice or receipt number, so the row can be tied to its paper.
     document = models.CharField(max_length=60, blank=True)
@@ -1226,3 +1495,38 @@ class ProjectExpense(models.Model):
 
     def __str__(self):
         return f'{self.description} — {self.amount}'
+
+    @property
+    def unit_amount(self):
+        """What one unit cost, when the expense says what it bought."""
+        if not self.concept_id or not self.units:
+            return None
+        return (self.amount / self.units).quantize(Decimal('0.01'))
+
+    def sync_rate(self, user=None):
+        """Keep the concept's value history in step with this expense.
+
+        Created, corrected and removed together with the expense, so the
+        history never carries a price from a receipt that was later fixed or
+        deleted. Dated on the day the money was spent, not the day it was
+        typed, which is what keeps the "latest" value honest.
+        """
+        unit_amount = self.unit_amount
+        try:
+            existing = self.rate
+        except ExpenseRate.DoesNotExist:
+            existing = None
+
+        if unit_amount is None or unit_amount <= 0:
+            if existing:
+                existing.delete()
+            return None
+
+        values = {
+            'concept': self.concept, 'unit_amount': unit_amount,
+            'date': self.incurred_on, 'source': ExpenseRate.Source.REAL,
+            'supplier': self.supplier, 'recorded_by': user or self.recorded_by,
+            'note': f'Del gasto "{self.description}".',
+        }
+        rate, _ = ExpenseRate.objects.update_or_create(expense=self, defaults=values)
+        return rate

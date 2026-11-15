@@ -365,12 +365,12 @@
 /* Quote line items — editor inside the modal */
 /* Eight columns: description, kind of cost, and the six money ones. */
 .modal-overlay.modal-wide .modal {
-  width: 880px;
+  width: 1030px;
   max-width: calc(100vw - 48px);
 }
 
 .quote-items .quote-items-head {
-  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 28px;
+  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 54px 54px 28px;
 }
 
 .quote-items-head + .quote-item-row {
@@ -379,7 +379,7 @@
 
 .quote-item-row {
   display: grid;
-  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 28px;
+  grid-template-columns: 1fr 96px 50px 92px 62px 92px 54px 92px 54px 54px 28px;
   gap: 8px;
   align-items: center;
   padding: 4px 0;
@@ -817,4 +817,33 @@
 .quote-category-select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Internal cost lines: carried by the company, never charged, never shown to the client. */
+.quote-item-internal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.quote-item-internal input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.qd-internal {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #fdf3da;
+  color: #9a6b00;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
 }

@@ -4,6 +4,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { formatMoney } from '../stages'
 import { CATEGORIES, categoryColor } from '../categories'
+import { blockCategory } from '../expenses'
 import './ProjectCostsPanel.css'
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -46,11 +47,22 @@ export default function ProjectCostsPanel({ projectId }) {
   if (!summary) return null
 
   const sold = Number(summary.budget_sale) > 0
+  const closed = summary.is_closed
   // Expenses are always on top of the budget, so any of them is an overrun.
   const overrun = Number(summary.extra_cost) > 0
 
   return (
     <div className="costs-panel">
+      {closed && (
+        <div className="costs-warning">
+          <AlertTriangle size={15} />
+          <span>
+            Proyecto cerrado el {formatDate(summary.closed_on)}: no admite más gastos. Para
+            registrar uno tardío, reábrelo desde Resumen.
+          </span>
+        </div>
+      )}
+
       {!sold && (
         <div className="costs-warning">
           <AlertTriangle size={15} />
@@ -79,6 +91,28 @@ export default function ProjectCostsPanel({ projectId }) {
         </div>
       </div>
 
+      {Number(summary.provision) > 0 && (
+        <div className="costs-provision">
+          <div className="costs-provision-head">
+            <span className="costs-card-label">Provisión de gastos operacionales</span>
+            <span className={Number(summary.provision_balance) < 0 ? 'over' : ''}>
+              {Number(summary.provision_balance) < 0 ? 'Excedida en ' : 'Disponible '}
+              <strong>{formatMoney(Math.abs(Number(summary.provision_balance)))}</strong>
+            </span>
+          </div>
+          <div className="costs-provision-bar">
+            <span
+              className={Number(summary.provision_balance) < 0 ? 'over' : ''}
+              style={{ width: `${Math.min(100, (Number(summary.extra_cost) / Number(summary.provision)) * 100)}%` }}
+            />
+          </div>
+          <div className="costs-provision-foot">
+            {formatMoney(summary.extra_cost)} gastados de {formatMoney(summary.provision)} presupuestados.
+            Los gastos reemplazan la provisión; lo que la excede sube el costo.
+          </div>
+        </div>
+      )}
+
       {sold && (
         <div className="costs-margins">
           <div className="costs-margin">
@@ -92,9 +126,23 @@ export default function ProjectCostsPanel({ projectId }) {
             <strong>{percent(summary.real_margin)}</strong>
             <span className="costs-margin-profit">{formatMoney(summary.real_profit)}</span>
           </div>
+          {Number(summary.commission_rate) > 0 && (
+            <div className="costs-commission">
+              <div>
+                <span className="costs-card-label">
+                  Comisión{summary.commission_to ? ` de ${summary.commission_to}` : ''} ({Number(summary.commission_rate)}% de la utilidad)
+                </span>
+                <span>{formatMoney(summary.budget_commission)} → <strong>{formatMoney(summary.real_commission)}</strong></span>
+              </div>
+              <div>
+                <span className="costs-card-label">Utilidad neta, después de la comisión</span>
+                <span>{formatMoney(summary.quoted_net_profit)} → <strong>{formatMoney(summary.real_net_profit)}</strong></span>
+              </div>
+            </div>
+          )}
           <p className="costs-margin-note">
-            La venta no se mueve: el cliente ya aceptó el documento. Lo que aparece
-            ejecutando se suma al costo y sale de la utilidad.
+            La venta no se mueve: el cliente ya aceptó el documento. Lo que se gasta
+            reemplaza la provisión; lo que la excede sale de la utilidad.
           </p>
         </div>
       )}
@@ -104,7 +152,8 @@ export default function ProjectCostsPanel({ projectId }) {
           <div className="costs-table-head">
             <span>Categoría</span>
             <span>Presupuestado</span>
-            <span>Gastos extra</span>
+            <span>Provisión</span>
+            <span>Gastos</span>
             <span>Costo real</span>
           </div>
           {summary.by_category.map((row) => {
@@ -116,6 +165,9 @@ export default function ProjectCostsPanel({ projectId }) {
                   {row.label}
                 </span>
                 <span>{formatMoney(row.budget)}</span>
+                <span className="costs-estimate">
+                  {Number(row.provision) > 0 ? formatMoney(row.provision) : '—'}
+                </span>
                 <span className={extra > 0 ? 'gap-bad' : ''}>
                   {extra > 0 ? '+' : ''}{formatMoney(extra)}
                 </span>
@@ -128,7 +180,8 @@ export default function ProjectCostsPanel({ projectId }) {
 
       <div className="costs-section-header">
         <h3>Gastos registrados</h3>
-        <button className="opp-add-btn" onClick={() => setModal(true)}>
+        <button className="opp-add-btn" onClick={() => setModal(true)} disabled={closed}
+                title={closed ? 'El proyecto está cerrado' : undefined}>
           <Plus size={13} /> Registrar gasto
         </button>
       </div>
@@ -153,10 +206,12 @@ export default function ProjectCostsPanel({ projectId }) {
               </span>
               <span className="costs-expense-doc">{expense.document || '—'}</span>
               <span className="costs-expense-amount">{formatMoney(expense.amount)}</span>
-              <button className="costs-expense-remove" title="Eliminar"
-                      onClick={() => deleteExpense(expense)}>
-                <Trash2 size={13} />
-              </button>
+              {closed ? <span /> : (
+                <button className="costs-expense-remove" title="Eliminar"
+                        onClick={() => deleteExpense(expense)}>
+                  <Trash2 size={13} />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -176,24 +231,55 @@ export default function ProjectCostsPanel({ projectId }) {
 function ExpenseFormModal({ projectId, onClose, onSaved }) {
   const [form, setForm] = useState({
     incurred_on: today(), category: 'gasto', description: '',
-    amount: '', supplier: '', document: '', notes: '',
+    amount: '', concept: '', units: '1', supplier: '', document: '', notes: '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [concepts, setConcepts] = useState([])
+
+  useEffect(() => {
+    api.get('/expense-concepts/?active=1').then((res) => setConcepts(res.data))
+  }, [])
 
   const set = (field, value) => setForm((prev) => ({ ...prev, [field]: value }))
+
+  // Choosing what the money bought fills in the obvious: its category, and
+  // its name when nothing was typed yet.
+  const pickConcept = (id) => {
+    const concept = concepts.find((c) => String(c.id) === String(id))
+    setForm((prev) => ({
+      ...prev,
+      concept: id,
+      units: '1',
+      ...(concept ? {
+        category: blockCategory(concept.block),
+        description: prev.description || concept.name,
+      } : {}),
+    }))
+  }
+
+  const selected = concepts.find((c) => String(c.id) === String(form.concept))
+  const unitValue = selected && Number(form.units) > 0
+    ? (Number(form.amount) || 0) / Number(form.units)
+    : null
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setSaving(true)
     setError('')
     try {
-      await api.post('/project-expenses/', { ...form, project: projectId })
+      await api.post('/project-expenses/', {
+        ...form,
+        project: projectId,
+        concept: form.concept || null,
+        units: form.concept ? (form.units || 1) : 1,
+      })
       onSaved()
       onClose()
     } catch (err) {
       const data = err.response?.data
-      setError(data?.amount?.[0] || data?.description?.[0] || 'No se pudo registrar el gasto.')
+      setError(data?.amount?.[0] || data?.units?.[0] || data?.description?.[0]
+        || data?.non_field_errors?.[0] || 'No se pudo registrar el gasto.')
       setSaving(false)
     }
   }
@@ -232,6 +318,31 @@ function ExpenseFormModal({ projectId, onClose, onSaved }) {
                    onChange={(e) => set('amount', e.target.value)} placeholder="0" required />
           </div>
         </div>
+
+        {concepts.length > 0 && (
+          <div className="form-row">
+            <div className="modal-field">
+              <label>Qué compró (opcional)</label>
+              <select value={form.concept} onChange={(e) => pickConcept(e.target.value)}>
+                <option value="">Sin concepto</option>
+                {concepts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            {selected && (
+              <div className="modal-field">
+                <label>Cantidad ({selected.unit})</label>
+                <input type="number" min="0" step="any" value={form.units}
+                       onChange={(e) => set('units', e.target.value)} />
+              </div>
+            )}
+          </div>
+        )}
+        {selected && unitValue != null && (
+          <p className="costs-modal-hint">
+            Equivale a {formatMoney(unitValue)} por {selected.unit}. Queda como valor
+            real de «{selected.name}» para estimar la próxima vez.
+          </p>
+        )}
 
         <div className="form-row">
           <div className="modal-field">
